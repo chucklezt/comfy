@@ -22,4 +22,5 @@ exec python main.py \
     --listen \
     --use-pytorch-cross-attention \
     --reserve-vram 2.5 \
+    --lowvram \
     "$@"
