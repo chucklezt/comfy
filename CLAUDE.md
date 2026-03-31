@@ -1,12 +1,12 @@
-# CLAUDE.md — LTX-2.3 Workspace Validation (chuckai)
+# CLAUDE.md — LTX-2.3 Workspace (chuckai)
 
 ## Context
 
 You are working on **chuckai** — a local Ubuntu 22.04 server with an AMD Radeon RX 6800 XT
 (16 GB VRAM, RDNA2 / gfx1030) running ROCm 6.3. The workspace is at `~/comfy/`.
 
-This session goal is **full end-to-end validation**: confirm the environment is clean, fix
-known issues, download models, and produce a first successful inference frame in ComfyUI.
+End-to-end validation is **complete**. The full LTX-2.3 22B GGUF pipeline is confirmed
+working on the RX 6800 XT. This file is the ongoing operational reference for this workspace.
 
 ---
 
@@ -33,93 +33,57 @@ source ~/comfy/env.sh
 
 ---
 
-## Known Issues to Resolve (in order)
+## Confirmed Model Inventory
 
-### 1. Models not yet downloaded
-All four model directories exist but are empty. Models must be present before ComfyUI can run.
+All models downloaded and validated. Do not move, rename, or re-download these files.
 
-Target paths:
-- `~/comfy/ComfyUI/models/diffusion_models/ltx-2.3/` — LTX-2.3-22B transformer (GGUF Q3_K_M, ~10.1 GB)
-- `~/comfy/ComfyUI/models/text_encoders/ltx-2.3/` — Gemma-3-12B-IT text encoder (GGUF Q4_K_M, ~7 GB)
-- `~/comfy/ComfyUI/models/vae/ltx-2.3/` — LTX VAE checkpoint
-- `~/comfy/ComfyUI/models/loras/ltx-2.3/` — ID-LoRA weights (download only if validating LoRA)
+| Model | File | Size | Path |
+|---|---|---|---|
+| Transformer | `ltx-2.3-22b-dev-Q3_K_M.gguf` | 11 GB | `models/diffusion_models/ltx-2.3/` |
+| Text Encoder | `google_gemma-3-12b-it-Q4_K_M.gguf` | 6.8 GB | `models/text_encoders/ltx-2.3/` |
+| Embeddings Connector | `ltx-2.3_text_projection_bf16.safetensors` | 2.2 GB | `models/text_encoders/ltx-2.3/` |
+| VAE | `LTX23_video_vae_bf16.safetensors` | 1.4 GB | `models/vae/ltx-2.3/` |
+| ID-LoRA weights | *(not yet downloaded)* | ~1.1 GB | `models/loras/ltx-2.3/` |
 
-**First, review the download script to get the exact huggingface-cli commands:**
-```bash
-cat ~/comfy/download_models.sh
-```
-Then execute the commands it prints. Use `huggingface-cli download` with `--local-dir` pointing
-to the correct staging folder above. Do not move or rename model files after downloading.
-
-### 2. --reserve-vram flag unconfirmed
-
-`launch.sh` passes `--reserve-vram 2.5` to ComfyUI's `main.py`. This flag may not exist in
-the installed ComfyUI version.
-
-**Check:**
-```bash
-source ~/comfy/env.sh
-python ~/comfy/ComfyUI/main.py --help | grep -i reserve
-```
-
-- If the flag exists: proceed as-is.
-- If not found: edit `launch.sh` and remove `--reserve-vram 2.5`. VRAM headroom will be
-  managed by tiled VAE settings (tile_size=512, temporal_size=32) instead.
+**Sources:**
+- Transformer: `unsloth/LTX-2.3-GGUF` (not `Lightricks/LTX-Video-2.3-22B-GGUF` — that repo does not exist)
+- Text encoder + embeddings connector + VAE: `Kijai/LTX2.3_comfy`
+- Full fp16 checkpoint (`ltx-2.3-22b-dev.safetensors`) is 43 GB — incompatible with 16 GB VRAM, do not download
 
 ---
 
-## Validation Sequence
+## Confirmed Working Pipeline (Text-to-Video)
 
-Work through these steps in order. Do not skip ahead. Report status at each step before
-proceeding.
+LTX-2.3 is an audio-video model. The standard ComfyUI `CLIPLoaderGGUF` + `KSampler` pipeline
+does **not** work — it produces a tensor dimension mismatch. Always use the LTX-specific nodes
+built into ComfyUI core.
 
-### Step 1 — Environment check
-```bash
-source ~/comfy/env.sh
-python ~/comfy/diagnostics.py
-```
-All items marked ERROR must pass. WARNING items on empty model directories are expected at
-this stage. Fix any ERROR before continuing.
+| Stage | Node | File / Setting |
+|---|---|---|
+| Transformer | `UnetLoaderGGUF` | `ltx-2.3/ltx-2.3-22b-dev-Q3_K_M.gguf` |
+| Text encoder + connector | `DualCLIPLoaderGGUF` | clip_name1: Gemma GGUF, clip_name2: text projection, type: `ltxv` |
+| Conditioning | `LTXVConditioning` | LTX-specific — not `CLIPTextEncode` |
+| Scheduler | `LTXVScheduler` | LTX-specific — not `BasicScheduler` |
+| Sampler | `SamplerCustomAdvanced` | not `KSampler` |
+| VAE decode | `VAEDecodeTiled` | tile_size=**256**, temporal_size=32 |
 
-### Step 2 — Verify --reserve-vram
-Apply the check from Known Issue #2. Update launch.sh if needed. Show me the relevant line
-in launch.sh before and after any change.
-
-### Step 3 — Download models
-Apply the check from Known Issue #1. Download transformer and text encoder GGUFs
-first (VAE second, LoRA last). Confirm each file lands in the correct staging directory and
-is non-zero size. Do not proceed to Step 4 until transformer + text encoder + VAE are present.
-
-### Step 4 — Re-run diagnostics (full)
-```bash
-source ~/comfy/env.sh
-python ~/comfy/diagnostics.py
-```
-At this point model-presence WARNINGs should clear. All ERRORs must still pass.
-
-### Step 5 — Launch ComfyUI
-```bash
-~/comfy/launch.sh
-```
-Confirm it starts without errors and the web UI is reachable at `http://localhost:8188`.
-Report the last 20 lines of startup output.
-
-### Step 6 — First inference smoke test
-In ComfyUI, load the default LTX workflow (or the reference config at
-`~/comfy/comfyui_rdna2.yaml`). Use these safe parameters for the first run:
+### Baseline inference parameters (validated)
 
 | Parameter | Value |
 |---|---|
-| Resolution | 512 × 512 |
-| Frames | 17 (minimum for LTX temporal model) |
+| Resolution | 512 x 512 |
+| Frames | 17 (formula: 1 + 8N, minimum N=2) |
 | Steps | 20 |
 | CFG | 3.5 |
-| Prompt | "a still camera shot of a red ball on a wooden table" |
+| Runtime | ~3 min 15 sec |
 
-Dimensions must be multiples of 32. 512×512 is safe. Do not use arbitrary resolutions.
+### Session startup
 
-If inference completes and produces a video file: validation is complete.
-If it OOMs or errors: capture the full traceback and report it before attempting any fix.
+```bash
+source ~/comfy/env.sh
+~/comfy/launch.sh
+# UI at http://localhost:8188
+```
 
 ---
 
@@ -127,8 +91,8 @@ If it OOMs or errors: capture the full traceback and report it before attempting
 
 - **Never install bitsandbytes.** It is CUDA-only and will segfault on RDNA2. The import
   hook in `block_bitsandbytes.py` will catch accidental re-introduction, but don't let it
-  get that far. If any `pip install` command pulls it in as a transitive dependency, uninstall
-  it immediately: `pip uninstall bitsandbytes -y`.
+  get that far. If any `pip install` pulls it in as a transitive dependency, uninstall
+  immediately: `pip uninstall bitsandbytes -y`.
 
 - **Never use adamw8bit or any bitsandbytes optimizer.** Use `adafactor` for any training
   config work.
@@ -137,14 +101,16 @@ If it OOMs or errors: capture the full traceback and report it before attempting
   will not see the GPU correctly.
 
 - **Video dimensions must be multiples of 32.** Non-aligned values cause HIP memory access
-  faults. Safe presets: 512×512, 768×512, 1024×576.
+  faults. Safe presets: 512x512, 768x512, 1024x576.
 
-- **Text encoder must be CPU-offloaded.** The Gemma-3 GGUF (~4 GB) must move to system RAM
-  immediately after encoding. This is what makes the 16 GB budget work. Do not change this
-  behavior.
+- **Text encoder must be CPU-offloaded.** The Gemma-3 GGUF offloads to system RAM after
+  encoding. This is what makes the 16 GB budget work. Do not change this behavior.
 
-- **VAE decode must use tiled mode.** tile_size=512, temporal_size=32. Do not switch to
-  full VAE decode.
+- **VAE decode must use tiled mode.** tile_size=**256**, temporal_size=32. tile_size=512
+  causes OOM. Do not switch to full VAE decode or increase tile_size above 256.
+
+- **--lowvram flag is required in launch.sh.** This forces the transformer to offload before
+  VAE decode, creating the headroom needed. Do not remove this flag.
 
 - **Do not upgrade PyTorch.** `2.9.1+rocm6.3` is the correct version. Do not run
   `pip install --upgrade torch` or similar.
@@ -152,15 +118,19 @@ If it OOMs or errors: capture the full traceback and report it before attempting
 - **Show diffs before editing files.** Before modifying launch.sh, env.sh, or any custom
   node file, show the current content of the relevant section and explain the change.
 
+- **Autonomous execution.** Do not ask for confirmation before running commands unless the
+  action is destructive (deleting files, uninstalling packages, modifying core ComfyUI files).
+  For downloads, workflow submissions, and diagnostic commands, proceed without asking.
+
 ---
 
 ## Watch Items (not broken, monitor as we go)
 
 ### transformers version
 Currently at `5.4.0`. The ID-LoRA-LTX2.3-ComfyUI node was authored against `transformers < 5.0`
-and the README flags a potential incompatibility. No conflict has been observed yet. Monitor for
-errors during LoRA loading or prompt encoding. If you see an `AttributeError` or `ImportError`
-traceable to `transformers`, the fix is:
+and the README flags a potential incompatibility. No conflict has been observed during
+text-to-video inference. Monitor for errors during LoRA loading or prompt encoding.
+If you see an `AttributeError` or `ImportError` traceable to `transformers`, the fix is:
 ```bash
 source ~/comfy/env.sh
 pip install 'transformers>=4.52,<5'
@@ -171,19 +141,21 @@ Do not apply this preemptively — only if an actual error surfaces.
 
 ## VRAM Budget Reference
 
-```
-LTX-2.3-22B Transformer (GGUF Q3_K_M)   ~10.1 GB  GPU
-LoRA patch overhead                        ~0.5 GB  GPU
-VAE decode (tiled 512×32)                  ~2.5 GB  GPU
-OS/driver reserve                           2.5 GB  GPU
-────────────────────────────────────────────────────────
-TOTAL PEAK                                ~15.6 GB
+| Component | GPU Memory |
+|---|---|
+| LTX-2.3-22B Transformer (GGUF Q3_K_M) | ~11.0 GB |
+| Text Projection / Embeddings Connector | ~2.2 GB |
+| VAE decode (tiled 256x32) | ~1.9 GB |
+| **PEAK during sampling** | **~13.2 GB (79%)** |
+| Text Encoder (Gemma-3 Q4_K_M) | CPU offload (0 GB GPU) |
+| Transformer during VAE decode | CPU offload via --lowvram (0 GB GPU) |
 
-Text Encoder (Gemma-3 Q4_K_M)           → CPU RAM  (offloaded after encoding)
-```
+**--lowvram is essential.** Without it, the transformer stays in VRAM during VAE decode and
+there is insufficient headroom for the 1.9 GB tiled allocation. With it, the sequence is:
+encode → offload transformer to CPU → VAE decode → done.
 
-If you see an OOM that doesn't fit this budget, check: (1) text encoder is actually offloaded,
-(2) VAE is in tiled mode, (3) no other processes are holding VRAM (`rocm-smi`).
+If you see an OOM: (1) confirm `--lowvram` is in launch.sh, (2) confirm tile_size=256,
+(3) check no other processes hold VRAM via `rocm-smi`.
 
 ---
 
@@ -196,8 +168,23 @@ rocm-smi
 # Confirm GPU is visible to PyTorch
 source ~/comfy/env.sh && python -c "import torch; print(torch.cuda.get_device_name(0)); print(torch.version.hip)"
 
-# Check what's in model directories
-find ~/comfy/ComfyUI/models/diffusion_models/ltx-2.3 ~/comfy/ComfyUI/models/text_encoders/ltx-2.3 ~/comfy/ComfyUI/models/vae/ltx-2.3 -type f -ls 2>/dev/null
+# Check all models are present
+find ~/comfy/ComfyUI/models/diffusion_models/ltx-2.3 \
+     ~/comfy/ComfyUI/models/text_encoders/ltx-2.3 \
+     ~/comfy/ComfyUI/models/vae/ltx-2.3 \
+     -type f -ls 2>/dev/null
+
+# Confirm --lowvram is in launch.sh
+grep lowvram ~/comfy/launch.sh
+
+# Confirm DualCLIPLoaderGGUF sees both text encoder files
+curl -s http://127.0.0.1:8188/object_info | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+opts = d.get('DualCLIPLoaderGGUF',{}).get('input',{}).get('required',{})
+print('clip_name1:', opts.get('clip_name1',[[]])[0])
+print('clip_name2:', opts.get('clip_name2',[[]])[0])
+"
 
 # Check transformers version
 source ~/comfy/env.sh && python -c "import transformers; print(transformers.__version__)"

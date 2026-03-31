@@ -584,57 +584,79 @@ exec python main.py \
     --listen \
     --use-pytorch-cross-attention \
     --reserve-vram 2.5 \
+    --lowvram \
     "$@"
 ```
 
 **Launch flags explained:**
 
-| Flag                              | Purpose                                                      |
-|-----------------------------------|--------------------------------------------------------------|
-| `--listen`                        | Bind to 0.0.0.0 for network access                          |
-| `--use-pytorch-cross-attention`   | Use SDPA (scaled_dot_product_attention) — native, no xformers needed |
-| `--reserve-vram 2.5`             | Reserve 2.5 GB for OS/driver, leaving ~13.5 GB for models    |
+| Flag | Purpose |
+|---|---|
+| `--listen` | Bind to 0.0.0.0 for network access |
+| `--use-pytorch-cross-attention` | Use SDPA — native, no xformers needed |
+| `--reserve-vram 2.5` | Reserve 2.5 GB for OS/driver |
+| `--lowvram` | **Required** — forces transformer to offload to CPU before VAE decode, creating headroom for tiled decode on 16 GB |
 
 ### 9. Model Download Helper
 
 Created `download_models.sh` — prints `huggingface-cli download` commands for review before execution. Does not auto-download.
 
-Target models for 16 GB VRAM:
+**Validated model inventory for 16 GB VRAM:**
 
-| Model                               | Quant    | Size     | Target Directory                   |
-|-------------------------------------|----------|----------|------------------------------------|
-| LTX-2.3-22B Transformer            | Q3_K_M   | ~10.1 GB | `models/diffusion_models/ltx-2.3/` |
-| Gemma-3-12B-IT Text Encoder        | Q4_K_M   | ~7.4 GB  | `models/text_encoders/ltx-2.3/`    |
-| LTX-Video VAE                      | fp16     | ~200 MB  | `models/vae/ltx-2.3/`             |
-| ID-LoRA weights (optional)         | fp16     | ~1.1 GB  | `models/loras/ltx-2.3/`           |
+| Model | File | Size | Source | Target Directory |
+|---|---|---|---|---|
+| LTX-2.3-22B Transformer | `ltx-2.3-22b-dev-Q3_K_M.gguf` | 11 GB | `unsloth/LTX-2.3-GGUF` | `models/diffusion_models/ltx-2.3/` |
+| Gemma-3-12B-IT Text Encoder | `google_gemma-3-12b-it-Q4_K_M.gguf` | 6.8 GB | `Kijai/LTX2.3_comfy` | `models/text_encoders/ltx-2.3/` |
+| LTX Text Projection (Embeddings Connector) | `ltx-2.3_text_projection_bf16.safetensors` | 2.2 GB | `Kijai/LTX2.3_comfy` | `models/text_encoders/ltx-2.3/` |
+| LTX VAE | `LTX23_video_vae_bf16.safetensors` | 1.4 GB | `Kijai/LTX2.3_comfy` | `models/vae/ltx-2.3/` |
+| ID-LoRA weights (optional) | TBD | ~1.1 GB | TBD | `models/loras/ltx-2.3/` |
+
+**Important notes:**
+- The original `download_models.sh` referenced incorrect repo names. Use the sources above.
+- The full fp16 checkpoint (`ltx-2.3-22b-dev.safetensors`) is 43 GB — do not download, incompatible with 16 GB VRAM.
+- The text projection file is **required** alongside the Gemma GGUF. Without it `DualCLIPLoaderGGUF` produces a tensor dimension mismatch at the sampler.
+- `huggingface-cli` creates a nested subdirectory on download. Move files up one level afterward:
+  ```bash
+  mv ~/comfy/ComfyUI/models/text_encoders/ltx-2.3/text_encoders/ltx-2.3_text_projection_bf16.safetensors \
+     ~/comfy/ComfyUI/models/text_encoders/ltx-2.3/
+  ```
 
 ### 10. Workflow Reference Config
 
 Created `comfyui_rdna2.yaml` — documents recommended ComfyUI node settings for workflows. Not consumed by ComfyUI directly; serves as a human-readable reference for configuring nodes in the UI.
 
+**Important:** LTX-2.3 is an audio-video model. The standard `CLIPLoaderGGUF` + `KSampler` pipeline does **not** work — it produces a tensor dimension mismatch at the sampler. The correct pipeline uses LTX-specific nodes built into ComfyUI core.
+
 ```yaml
 # ComfyUI Workflow Defaults — LTX-2.3 on RDNA2 (RX 6800 XT, 16 GB)
+# VALIDATED — end-to-end smoke test passed
 
 transformer:
   node: "UnetLoaderGGUF"            # from ComfyUI-GGUF
-  model: "ltx-2.3/ltxv-22b-0.9.7-dev-Q3_K_M.gguf"
+  model: "ltx-2.3/ltx-2.3-22b-dev-Q3_K_M.gguf"
 
 text_encoder:
-  node: "CLIPLoaderGGUF"            # from ComfyUI-GGUF
-  model: "ltx-2.3/google_gemma-3-12b-it-Q4_K_M.gguf"
-  offload_to_cpu: true              # AGGRESSIVE OFFLOAD: free ~4 GB after encode
+  node: "DualCLIPLoaderGGUF"        # from ComfyUI-GGUF — NOT CLIPLoaderGGUF (single)
+  clip_name1: "ltx-2.3/google_gemma-3-12b-it-Q4_K_M.gguf"
+  clip_name2: "ltx-2.3/ltx-2.3_text_projection_bf16.safetensors"  # REQUIRED
+  type: "ltxv"
+
+conditioning:
+  node: "LTXVConditioning"          # LTX-specific — NOT CLIPTextEncode
+
+scheduler:
+  node: "LTXVScheduler"             # LTX-specific — NOT BasicScheduler
+
+sampler:
+  node: "SamplerCustomAdvanced"     # NOT KSampler
 
 vae:
   node: "VAEDecodeTiled"            # mandatory for 16 GB — never use VAEDecode
-  tile_size: 512
+  tile_size: 256                    # 512 causes OOM — do not increase
   temporal_size: 32
 
-lora:
-  node: "IDLoRALTXPatcher"          # from comfyui-id-lora-ltx
-  directory: "ltx-2.3/"
-
 cross_attention:
-  backend: "scaled_dot_product_attention"   # SDPA — native PyTorch ≥2.0
+  backend: "scaled_dot_product_attention"   # SDPA — native PyTorch >= 2.0
 
 optimizer:
   use: "adafactor"
@@ -643,10 +665,18 @@ optimizer:
     - "bitsandbytes"    # CUDA-only — no HIP support
 
 dimension_presets:
-  - { name: "landscape_hd", width: 768,  height: 512 }
-  - { name: "portrait_hd",  width: 512,  height: 768 }
-  - { name: "square",       width: 512,  height: 512 }
-  - { name: "wide",         width: 1024, height: 576 }
+  - { name: "square",       width: 512,  height: 512  }   # validated baseline
+  - { name: "landscape_hd", width: 768,  height: 512  }
+  - { name: "portrait_hd",  width: 512,  height: 768  }
+  - { name: "wide",         width: 1024, height: 576  }
+  # All dimensions must be multiples of 32
+
+frame_counts:
+  # Formula: 1 + 8N (minimum N=2 → 17 frames)
+  - 17    # minimum / baseline
+  - 25
+  - 33
+  - 49
 ```
 
 ---
@@ -820,46 +850,40 @@ yarl                                   1.23.0           PyPI
 
 ## VRAM Budget
 
-16 GB total on the RX 6800 XT. The memory plan uses aggressive offloading to fit within budget:
+16 GB total on the RX 6800 XT. Aggressive offloading is required to fit within budget:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    VRAM ALLOCATION (16 GB)                   │
-├─────────────────────────────────────────────┬───────────────┤
-│ Component                                   │ GPU Memory    │
-├─────────────────────────────────────────────┼───────────────┤
-│ LTX-2.3-22B Transformer (GGUF Q3_K_M)      │ ~10.1 GB      │
-│ LoRA patch overhead                         │  ~0.5 GB      │
-│ VAE decode (tiled, 512×32)                  │  ~2.5 GB      │
-│ Reserved for OS/driver (--reserve-vram 2.5) │   2.5 GB      │
-├─────────────────────────────────────────────┼───────────────┤
-│ TOTAL PEAK GPU                              │ ~15.6 GB      │
-├─────────────────────────────────────────────┼───────────────┤
-│ Text Encoder (Gemma-3 Q4_K_M)              │ → CPU offload │
-│   Loaded to GPU for encoding, then freed    │   (0 GB GPU   │
-│   to system RAM, releasing ~4 GB before     │    at decode)  │
-│   sampling + VAE decode begins              │               │
-└─────────────────────────────────────────────┴───────────────┘
-```
+| Component | GPU Memory |
+|---|---|
+| LTX-2.3-22B Transformer (GGUF Q3_K_M) | ~11.0 GB |
+| Text Projection / Embeddings Connector | ~2.2 GB |
+| VAE decode (tiled 256x32) | ~1.9 GB |
+| **PEAK during sampling** | **~13.2 GB (79%)** |
+| Text Encoder (Gemma-3 Q4_K_M) | CPU offload (0 GB GPU) |
+| Transformer during VAE decode (--lowvram) | CPU offload (0 GB GPU) |
+
+**`--lowvram` is required.** Without it the transformer stays in VRAM during VAE decode,
+leaving only ~1 GB free — insufficient for the 1.9 GB tiled allocation. With it, the
+pipeline sequences correctly: encode → offload transformer → VAE decode.
 
 ---
 
 ## Quick Start
 
+Models are already downloaded. For a fresh session:
+
 ```bash
-# 1. Source environment
-source env.sh
+# 1. Source environment and launch
+source ~/comfy/env.sh
+~/comfy/launch.sh
 
-# 2. Download models (review commands, then run them)
-./download_models.sh
+# 2. Open UI at http://localhost:8188
 
-# 3. Run full diagnostics
-python diagnostics.py
+# 3. Build workflow using these nodes (in order):
+#    UnetLoaderGGUF -> DualCLIPLoaderGGUF -> LTXVConditioning
+#    -> LTXVScheduler -> SamplerCustomAdvanced -> VAEDecodeTiled
 
-# 4. Launch ComfyUI
-./launch.sh
-
-# Open http://localhost:8188 in your browser
+# 4. Run diagnostics anytime
+python ~/comfy/diagnostics.py
 ```
 
 ---
@@ -868,10 +892,20 @@ python diagnostics.py
 
 1. **`expandable_segments` not yet active on RDNA2/HIP.** The env var is set for forward compatibility. PyTorch 2.9.1+rocm6.3 prints a harmless warning at startup. This will auto-resolve when ROCm HIP adds support.
 
-2. **`bitsandbytes` is a transitive dependency of `ltx-trainer`.** It was uninstalled after `pip install -e ltx-trainer` pulled it in. If you ever re-install ltx-trainer or run `pip install` on packages that depend on it, check and remove it again: `pip uninstall bitsandbytes -y`.
+2. **`bitsandbytes` is a transitive dependency of `ltx-trainer`.** It was uninstalled after `pip install -e ltx-trainer` pulled it in. If you ever re-install ltx-trainer or run `pip install` on packages that depend on it, remove it again: `pip uninstall bitsandbytes -y`.
 
-3. **`transformers` version.** The ID-LoRA README notes that ComfyUI may install `transformers` 5.x which can be incompatible. Currently at 5.4.0. If LoRA loading fails, try: `pip install 'transformers>=4.52,<5'`.
+3. **`transformers` version.** Currently at 5.4.0. The ID-LoRA README flags potential incompatibility with 5.x. No issues observed during text-to-video inference. Monitor during LoRA loading. If failures occur: `pip install 'transformers>=4.52,<5'`.
 
-4. **ID-LoRA README states 24+ GB VRAM required.** The GGUF quantization strategy (Q3_K_M transformer + Q4_K_M text encoder with CPU offload) brings this within 16 GB, but at the cost of some quality vs. the full-precision pipeline.
+4. **Standard ComfyUI KSampler pipeline does not work with LTX-2.3.** LTX-2.3 is an audio-video model. `CLIPLoaderGGUF` (single) + `KSampler` produces a tensor dimension mismatch. Always use `DualCLIPLoaderGGUF` (with both Gemma GGUF and text projection file) + `LTXVConditioning` + `LTXVScheduler` + `SamplerCustomAdvanced`.
 
-5. **Video dimensions must be multiples of 32.** Non-aligned dimensions cause HIP memory access faults. Common safe presets: 512x512, 768x512, 1024x576.
+5. **Text projection file is required.** `ltx-2.3_text_projection_bf16.safetensors` (2.2 GB) must be present in `models/text_encoders/ltx-2.3/` alongside the Gemma GGUF. Without it the embedding shape is wrong and inference will fail.
+
+6. **`--lowvram` flag is required in launch.sh.** Without it the transformer stays in VRAM during VAE decode and causes OOM. `tile_size` must also be 256, not 512.
+
+7. **ID-LoRA pipeline requires full safetensors checkpoint (43 GB).** The `IDLoraModelLoader` node expects a full fp16 checkpoint, not GGUFs. It is not usable on 16 GB VRAM as-is.
+
+8. **Video dimensions must be multiples of 32.** Non-aligned dimensions cause HIP memory access faults. Safe presets: 512x512, 768x512, 1024x576.
+
+9. **Frame count formula: 1 + 8N.** Valid counts: 17, 25, 33, 49, 65... Minimum is 17 (N=2).
+
+10. **First inference run is slow.** MIOpen compiles GPU kernels for gfx1030 on first use. Expect 10-15 minutes on the very first generation. Subsequent runs start within seconds.
