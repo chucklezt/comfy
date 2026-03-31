@@ -1,0 +1,6 @@
+venv/
+ComfyUI/
+ID-LoRA/
+__pycache__/
+*.pyc
+*.egg-info/

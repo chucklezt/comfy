@@ -1,0 +1,58 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ComfyUI Workflow Defaults — LTX-2.3 on RDNA2 (RX 6800 XT, 16 GB)
+#
+# Reference config for building workflows in ComfyUI. These are the
+# recommended node settings, not a ComfyUI config file.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Transformer ──────────────────────────────────────────────────────────────
+transformer:
+  node: "UnetLoaderGGUF"            # from ComfyUI-GGUF
+  model: "ltx-2.3/ltxv-22b-0.9.7-dev-Q3_K_M.gguf"
+  # ~10.1 GB VRAM
+
+# ── Text Encoder ─────────────────────────────────────────────────────────────
+text_encoder:
+  node: "CLIPLoaderGGUF"            # from ComfyUI-GGUF
+  model: "ltx-2.3/google_gemma-3-12b-it-Q4_K_M.gguf"
+  offload_to_cpu: true              # AGGRESSIVE OFFLOAD: free ~4 GB after encode
+
+# ── VAE ──────────────────────────────────────────────────────────────────────
+vae:
+  node: "VAEDecodeTiled"            # mandatory for 16 GB — never use VAEDecode
+  tile_size: 512
+  temporal_size: 32
+
+# ── LoRA ─────────────────────────────────────────────────────────────────────
+lora:
+  node: "IDLoRALTXPatcher"          # from comfyui-id-lora-ltx
+  directory: "ltx-2.3/"
+  # Applied AFTER text encoding, BEFORE sampling
+
+# ── Cross Attention ──────────────────────────────────────────────────────────
+cross_attention:
+  backend: "scaled_dot_product_attention"   # SDPA — native PyTorch ≥2.0
+  # Set via: --use-pytorch-cross-attention
+
+# ── Optimizer ────────────────────────────────────────────────────────────────
+optimizer:
+  use: "adafactor"
+  block:
+    - "adamw8bit"       # CUDA-only — segfaults on RDNA2
+    - "bitsandbytes"    # CUDA-only — no HIP support
+
+# ── Video Dimensions ─────────────────────────────────────────────────────────
+# ALL dimensions must be multiples of 32 to avoid HIP memory access faults.
+dimension_presets:
+  - name: "landscape_hd"
+    width: 768
+    height: 512
+  - name: "portrait_hd"
+    width: 512
+    height: 768
+  - name: "square"
+    width: 512
+    height: 512
+  - name: "wide"
+    width: 1024
+    height: 576
