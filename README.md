@@ -1,34 +1,82 @@
-# LTX-2.3 Video Generation Workspace
+# ComfyUI Video Generation Workspace
 
-ComfyUI + LTX-2.3 video generation optimized for **AMD Radeon RX 6800 XT** (16 GB VRAM, RDNA2 / gfx1030) running ROCm/HIP on Linux.
+Local AI video generation on **chuckai** — a personal Ubuntu 22.04 server running
+ComfyUI with GGUF-quantized models. This project has gone through two distinct hardware
+phases and now supports two active pipelines.
 
 ---
 
 ## Table of Contents
 
-- [Hardware & System](#hardware--system)
-- [Component Versions](#component-versions)
-- [Directory Structure](#directory-structure)
-- [What Was Done](#what-was-done)
-  - [1. Core Environment & Driver Config](#1-core-environment--driver-config)
-  - [2. Python Venv & PyTorch for ROCm](#2-python-venv--pytorch-for-rocm)
-  - [3. ComfyUI Installation](#3-comfyui-installation)
-  - [4. Custom Nodes](#4-custom-nodes)
-  - [5. LoRA Capability (ID-LoRA-LTX2.3)](#5-lora-capability-id-lora-ltx23)
-  - [6. bitsandbytes Safety Block](#6-bitsandbytes-safety-block)
-  - [7. Diagnostic Script](#7-diagnostic-script)
-  - [8. Launch Script](#8-launch-script)
-  - [9. Model Download Helper](#9-model-download-helper)
-  - [10. Workflow Reference Config](#10-workflow-reference-config)
-- [All Installed Packages](#all-installed-packages)
-- [All Files Created](#all-files-created)
-- [VRAM Budget](#vram-budget)
+- [Project History at a Glance](#project-history-at-a-glance)
+- [Current State (Phase 2 — RTX 3090 / CUDA)](#current-state-phase-2--rtx-3090--cuda)
+- [Phase 1 — RX 6800 XT / ROCm (Historical Reference)](#phase-1--rx-6800-xt--rocm-historical-reference)
+  - [Hardware & System](#hardware--system)
+  - [Component Versions (ROCm Era)](#component-versions-rocm-era)
+  - [Directory Structure](#directory-structure)
+  - [What Was Built — Phase 1](#what-was-built--phase-1)
+  - [VRAM Budget — RX 6800 XT](#vram-budget--rx-6800-xt)
+  - [Known Caveats — ROCm](#known-caveats--rocm)
+  - [All Installed Packages — ROCm Venv](#all-installed-packages--rocm-venv)
+- [Phase 2 — RTX 3090 / CUDA Rebuild](#phase-2--rtx-3090--cuda-rebuild)
+  - [Why the Rebuild](#why-the-rebuild)
+  - [What Was Done — Phase 2](#what-was-done--phase-2)
+  - [Component Versions (CUDA Era)](#component-versions-cuda-era)
+  - [Custom Nodes — Current](#custom-nodes--current)
+  - [LTX-2.3 Pipeline (Re-validated on CUDA)](#ltx-23-pipeline-re-validated-on-cuda)
+  - [VRAM Budget — RTX 3090](#vram-budget--rtx-3090)
+- [Phase 3 — Wan 2.2 I2V Portrait Animation](#phase-3--wan-22-i2v-portrait-animation)
+  - [Model Inventory — Wan 2.2](#model-inventory--wan-22)
+  - [Workflow JSON](#workflow-json)
+  - [Wan 2.2 Pipeline Reference](#wan-22-pipeline-reference)
+  - [VRAM Budget — Wan 2.2](#vram-budget--wan-22)
+- [Next Steps](#next-steps)
 - [Quick Start](#quick-start)
-- [Known Caveats](#known-caveats)
+- [Useful Commands](#useful-commands)
 
 ---
 
-## Hardware & System
+## Project History at a Glance
+
+| Phase | GPU | Stack | Pipeline | Status |
+|---|---|---|---|---|
+| 1 | AMD RX 6800 XT (16 GB) | ROCm 6.3 / `torch 2.9.1+rocm6.3` | LTX-2.3 22B text-to-video | ✅ Validated end-to-end |
+| 2 | NVIDIA RTX 3090 (24 GB) | CUDA 12.4 / `torch 2.6.0+cu124` | LTX-2.3 (carried over) | ✅ Stack rebuilt and verified |
+| 3 | NVIDIA RTX 3090 (24 GB) | CUDA 12.4 / `torch 2.6.0+cu124` | Wan 2.2 I2V 14B portrait animation | 🔄 Models downloading — first inference pending |
+
+The RX 6800 XT was physically present in chuckai alongside the RTX 3090. The ROCm venv
+was the default until a full investigation in May 2026 revealed that `torch.cuda.is_available()`
+was returning False on the 3090 — the existing venv had been built for AMD and the NVIDIA
+card was invisible to PyTorch. The rebuild corrected this.
+
+---
+
+## Current State (Phase 2 — RTX 3090 / CUDA)
+
+| Item | Value |
+|---|---|
+| GPU | NVIDIA GeForce RTX 3090 |
+| VRAM | 24 GiB (23.6 GiB usable) |
+| CUDA | 12.4 |
+| Driver | 595.58.03 |
+| cuDNN | 9.1.0 |
+| PyTorch | 2.6.0+cu124 |
+| triton | 3.2.0 |
+| Python | 3.10.12 |
+| ComfyUI | v0.20.1 (`2806163f`, 2026-05-04) |
+| env script | `~/comfy/env.sh` — source before every session |
+| Launch | `~/comfy/launch.sh` |
+
+---
+
+## Phase 1 — RX 6800 XT / ROCm (Historical Reference)
+
+This section preserves the complete original documentation from the ROCm era.
+The RX 6800 XT and its venv are no longer the active configuration, but the
+work done here — especially the VRAM budget analysis, bitsandbytes safety block,
+and LTX-specific pipeline discovery — directly informed Phase 2 and Phase 3.
+
+### Hardware & System
 
 | Component           | Value                                        |
 |---------------------|----------------------------------------------|
@@ -41,11 +89,9 @@ ComfyUI + LTX-2.3 video generation optimized for **AMD Radeon RX 6800 XT** (16 G
 | HIP Runtime         | 6.3.42134-a9a80e791                          |
 | ROCk Module         | 6.10.5                                       |
 
----
+### Component Versions (ROCm Era)
 
-## Component Versions
-
-### Core ML Stack
+#### Core ML Stack
 
 | Package            | Version             | Notes                                       |
 |--------------------|---------------------|---------------------------------------------|
@@ -57,7 +103,7 @@ ComfyUI + LTX-2.3 video generation optimized for **AMD Radeon RX 6800 XT** (16 G
 | safetensors        | 0.7.0               |                                             |
 | accelerate         | 1.13.0              |                                             |
 
-### LTX / LoRA Stack
+#### LTX / LoRA Stack
 
 | Package            | Version             | Notes                                       |
 |--------------------|---------------------|---------------------------------------------|
@@ -67,44 +113,14 @@ ComfyUI + LTX-2.3 video generation optimized for **AMD Radeon RX 6800 XT** (16 G
 | peft               | 0.18.1              | HuggingFace LoRA/adapter engine             |
 | optimum-quanto     | 0.2.7               | int8 quantization (HIP-safe, replaces bitsandbytes) |
 
-### GGUF / Quantization
+#### GGUF / Quantization
 
 | Package            | Version             | Notes                                       |
 |--------------------|---------------------|---------------------------------------------|
 | gguf               | 0.18.0              | GGUF model format reader                    |
 | sentencepiece      | 0.2.1               | Tokenizer for Gemma text encoder            |
 
-### ComfyUI
-
-| Package                         | Version   |
-|---------------------------------|-----------|
-| comfyui_frontend_package        | 1.42.8    |
-| comfyui_workflow_templates      | 0.9.39    |
-| comfyui-embedded-docs           | 0.4.3     |
-
-### Other Notable Packages
-
-| Package            | Version   | Notes                                         |
-|--------------------|-----------|-----------------------------------------------|
-| onnxruntime        | 1.23.2    |                                               |
-| opencv-python      | 4.13.0.92 |                                               |
-| numpy              | 2.2.6     |                                               |
-| scipy              | 1.15.3    |                                               |
-| scikit-image       | 0.25.2    |                                               |
-| scikit-learn       | 1.7.2     |                                               |
-| einops             | 0.8.2     |                                               |
-| kornia             | 0.8.2     |                                               |
-| spandrel           | 0.4.2     |                                               |
-| wandb              | 0.25.1    | Experiment tracking                           |
-| insightface        | 0.7.3     | Face analysis                                 |
-| torchcodec         | 0.11.0    | Video codec support                           |
-| imageio-ffmpeg     | 0.6.0     | FFmpeg bindings                               |
-| scenedetect        | 0.6.7.1   | Scene detection                               |
-| huggingface_hub    | 1.8.0     | Model downloads                               |
-
----
-
-## Directory Structure
+### Directory Structure
 
 ```
 comfy/
@@ -114,61 +130,33 @@ comfy/
 ├── block_bitsandbytes.py           # Python import hook to block bitsandbytes on RDNA2
 ├── download_models.sh              # Prints huggingface-cli commands for model downloads
 ├── comfyui_rdna2.yaml              # Reference config for workflow node settings
-├── README.md                       # This file
+├── env.sh.rocm-backup              # ← preserved ROCm env (reference only)
+├── launch.sh.rocm-backup           # ← preserved ROCm launch (reference only)
+├── venv-rocm-pipfreeze.txt         # ← preserved full pip freeze of ROCm venv
 │
-├── venv/                           # Python 3.10 virtual environment
-│   └── (PyTorch 2.9.1+rocm6.3, all packages)
+├── venv/                           # Python 3.10 virtual environment (now CUDA — see Phase 2)
 │
 ├── ComfyUI/                        # ComfyUI application
-│   ├── main.py                     # Entry point
-│   ├── comfy/                      # Core ComfyUI framework
+│   ├── main.py
 │   ├── custom_nodes/
-│   │   ├── ComfyUI-GGUF/          # GGUF model loader (UnetLoaderGGUF, CLIPLoaderGGUF)
-│   │   │   ├── nodes.py
-│   │   │   ├── loader.py
-│   │   │   ├── dequant.py
-│   │   │   ├── ops.py
-│   │   │   └── requirements.txt    # gguf>=0.13.0, sentencepiece, protobuf
-│   │   └── ID-LoRA-LTX2.3-ComfyUI/# ID-LoRA nodes for identity-preserving video
-│   │       ├── __init__.py         # Registers 5 ComfyUI nodes
-│   │       ├── nodes_model_loader.py
-│   │       ├── nodes_prompt_encoder.py
-│   │       ├── nodes_sampler.py
-│   │       ├── pipeline_wrapper.py # Uses ltx_trainer.quantization.quantize_model
-│   │       ├── requirements.txt    # ltx-core, ltx-pipelines, ltx-trainer
-│   │       ├── example_workflows/
-│   │       ├── example_inputs/
-│   │       └── example_outputs/
+│   │   ├── ComfyUI-GGUF/          # GGUF model loader
+│   │   └── ID-LoRA-LTX2.3-ComfyUI/
 │   └── models/
-│       ├── diffusion_models/
-│       │   └── ltx-2.3/            # (empty — download transformer GGUF here)
-│       ├── text_encoders/
-│       │   └── ltx-2.3/            # (empty — download Gemma-3 GGUF here)
-│       ├── vae/
-│       │   └── ltx-2.3/            # (empty — download VAE here)
-│       ├── loras/
-│       │   └── ltx-2.3/            # (empty — download ID-LoRA weights here)
-│       ├── checkpoints/
-│       ├── clip/
-│       ├── clip_vision/
-│       ├── controlnet/
-│       ├── embeddings/
-│       ├── upscale_models/
-│       └── ...
+│       ├── diffusion_models/ltx-2.3/
+│       ├── text_encoders/ltx-2.3/
+│       ├── vae/ltx-2.3/
+│       └── loras/ltx-2.3/
 │
-└── ID-LoRA/                        # Upstream ID-LoRA repository (cloned for ltx-trainer)
-    └── ID-LoRA-2.3/
-        └── packages/
-            ├── ltx-core/
-            ├── ltx-pipelines/
-            └── ltx-trainer/        # Installed as editable: pip install -e
+└── ID-LoRA/                        # Upstream ID-LoRA repo (cloned for ltx-trainer)
+    └── ID-LoRA-2.3/packages/
+        ├── ltx-core/
+        ├── ltx-pipelines/
+        └── ltx-trainer/
 ```
 
----
+### What Was Built — Phase 1
 
-## What Was Done
-
-### 1. Core Environment & Driver Config
+#### 1. Core Environment & Driver Config
 
 Created `env.sh` — must be sourced before any session. Sets:
 
@@ -186,51 +174,25 @@ Created `env.sh` — must be sourced before any session. Sets:
 
 ```bash
 #!/usr/bin/env bash
-# ─────────────────────────────────────────────────────────────────────────────
 # LTX-2.3 / ComfyUI — RDNA2 (gfx1030) Environment for AMD Radeon RX 6800 XT
-# Source this before launching ComfyUI:  source env.sh
-# ─────────────────────────────────────────────────────────────────────────────
+# (HISTORICAL — replaced by CUDA env.sh in Phase 2)
 
-# ── ROCm / HIP ──────────────────────────────────────────────────────────────
 export HSA_OVERRIDE_GFX_VERSION=10.3.0
-
-# PyTorch HIP allocator — expandable_segments reduces fragmentation OOMs.
-# NOTE: As of PyTorch 2.9.1+rocm6.3, expandable_segments is not yet supported
-# on RDNA2/HIP (only CUDA). We set the var anyway so it auto-activates if a
-# future PyTorch ROCm build adds support. The runtime warning is harmless.
 export PYTORCH_HIP_ALLOC_CONF="expandable_segments:True"
 export PYTORCH_ALLOC_CONF="expandable_segments:True"
-
-# MIOpen: use NORMAL find (mode 2) to avoid multi-GB workspace allocations
-# that would blow the 16GB budget during conv autotuning.
 export MIOPEN_FIND_MODE=2
-
-# Disable MIOpen convolution autotuning cache writes to avoid stale-cache
-# mismatches after driver updates.
 export MIOPEN_DISABLE_CACHE=0
-
-# ── ComfyUI / Inference ─────────────────────────────────────────────────────
 export COMFYUI_ENABLE_MIOPEN=1
-
-# Disable telemetry (HuggingFace Hub / analytics).
 export HF_HUB_DISABLE_TELEMETRY=1
 export DO_NOT_TRACK=1
-
-# ── Safety: block bitsandbytes ───────────────────────────────────────────────
 export BITSANDBYTES_BLOCKED=1
 
-# ── Activate venv ────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$SCRIPT_DIR/venv/bin/activate" ]; then
-    source "$SCRIPT_DIR/venv/bin/activate"
-fi
-
+source "$SCRIPT_DIR/venv/bin/activate"
 echo "✓ LTX-2.3 RDNA2 environment loaded (gfx1030 → HSA 10.3.0)"
 ```
 
-### 2. Python Venv & PyTorch for ROCm
-
-Created Python 3.10.12 virtual environment at `venv/`. Installed PyTorch ecosystem for ROCm 6.3:
+#### 2. Python Venv & PyTorch for ROCm
 
 ```bash
 python3 -m venv venv
@@ -240,346 +202,99 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 Result: `torch 2.9.1+rocm6.3`, `torchvision 0.24.1+rocm6.3`, `torchaudio 2.9.1+rocm6.3`.
 
-### 3. ComfyUI Installation
+#### 3. ComfyUI Installation
 
-ComfyUI cloned to `ComfyUI/` with requirements installed. Model subdirectories created under `ComfyUI/models/` with `ltx-2.3/` staging folders for:
-- `diffusion_models/ltx-2.3/` — transformer GGUF
-- `text_encoders/ltx-2.3/` — Gemma-3 GGUF
-- `vae/ltx-2.3/` — VAE weights
-- `loras/ltx-2.3/` — ID-LoRA weights
+ComfyUI cloned to `ComfyUI/`. Model subdirectories created with `ltx-2.3/` staging folders.
 
-### 4. Custom Nodes
+#### 4. Custom Nodes (ROCm era)
 
-Two custom nodes installed in `ComfyUI/custom_nodes/`:
+Two custom nodes installed:
 
-**ComfyUI-GGUF** — Provides `UnetLoaderGGUF` and `CLIPLoaderGGUF` nodes for loading GGUF-quantized models directly in ComfyUI. Dependencies: `gguf>=0.13.0`, `sentencepiece`, `protobuf`.
+**ComfyUI-GGUF** — `UnetLoaderGGUF` and `CLIPLoaderGGUF` for loading GGUF-quantized models.
 
-**ID-LoRA-LTX2.3-ComfyUI** — Provides 5 nodes for identity-preserving video generation:
-- `IDLoraModelLoader` — loads one-stage pipeline
-- `IDLoraTwoStageModelLoader` — loads two-stage pipeline (with spatial upsampler)
-- `IDLoraPromptEncoder` — encodes text prompts with Gemma-3
+**ID-LoRA-LTX2.3-ComfyUI** — 5 nodes for identity-preserving video generation:
+- `IDLoraModelLoader` — one-stage pipeline
+- `IDLoraTwoStageModelLoader` — two-stage pipeline with spatial upsampler
+- `IDLoraPromptEncoder` — text prompt encoding with Gemma-3
 - `IDLoraOneStageSampler` — single-resolution generation
 - `IDLoraTwoStageSampler` — 2x spatial upsampling generation
 
-### 5. LoRA Capability (ID-LoRA-LTX2.3)
+#### 5. LoRA Capability (ID-LoRA-LTX2.3)
 
-The ID-LoRA node was cloned but its Python dependencies were **not installed**. This was identified and fixed:
+`ltx-core` and `ltx-pipelines` installed from PyPI. `ltx-trainer` not on PyPI — installed
+from source:
 
-1. `ltx-core` (1.0.0) and `ltx-pipelines` (1.0.0) — installed from PyPI.
-2. `ltx-trainer` (1.0.0) — **not on PyPI**. Cloned the upstream `ID-LoRA/ID-LoRA` repo and installed from source:
-   ```bash
-   git clone --depth 1 https://github.com/ID-LoRA/ID-LoRA.git
-   pip install -e ID-LoRA/ID-LoRA-2.3/packages/ltx-trainer
-   ```
-3. This pulled in `peft 0.18.1` (HuggingFace LoRA engine) and `optimum-quanto 0.2.7` (int8 quantization that works on HIP).
-4. **`ltx-trainer` dragged in `bitsandbytes 0.49.2`** as a transitive dependency — this was **immediately uninstalled** because it is CUDA-only and will segfault on RDNA2:
-   ```bash
-   pip uninstall bitsandbytes -y
-   ```
+```bash
+git clone --depth 1 https://github.com/ID-LoRA/ID-LoRA.git
+pip install -e ID-LoRA/ID-LoRA-2.3/packages/ltx-trainer
+```
 
-The full LoRA import chain was verified clean:
+This pulled in `peft 0.18.1` and `optimum-quanto 0.2.7`. **`ltx-trainer` also dragged in
+`bitsandbytes 0.49.2`** — immediately uninstalled because it is CUDA-only and will segfault
+on RDNA2:
+
+```bash
+pip uninstall bitsandbytes -y
+```
+
+Verified import chain:
 ```
 ltx_trainer.quantization.quantize_model  ✓
 ltx_core.loader.LoraPathStrengthAndSDOps ✓
 ltx_pipelines.utils.ModelLedger          ✓
 peft 0.18.1                              ✓
 optimum-quanto 0.2.7                     ✓
-bitsandbytes                             ✗ (blocked/absent — safe)
+bitsandbytes                             ✗  (blocked/absent — safe)
 ```
 
-### 6. bitsandbytes Safety Block
+#### 6. bitsandbytes Safety Block
 
-Created `block_bitsandbytes.py` — a Python meta-path import hook that intercepts `import bitsandbytes` and raises a clear error instead of allowing a silent segfault. Activated when `BITSANDBYTES_BLOCKED=1` is set (which `env.sh` does).
+Created `block_bitsandbytes.py` — a Python meta-path import hook. Intercepts
+`import bitsandbytes` and raises a clear error instead of allowing a silent segfault.
+Activated when `BITSANDBYTES_BLOCKED=1` is set.
 
 ```python
-"""
-Import hook that blocks bitsandbytes on RDNA2 to prevent silent segfaults.
-
-Usage — add to the TOP of your launch script or sitecustomize.py:
-    import block_bitsandbytes  # noqa: F401
-
-Or let launch.sh inject it via PYTHONPATH.
-"""
-
-import importlib
-import importlib.abc
-import importlib.machinery
-import sys
-
-
 class _BitsAndBytesBlocker(importlib.abc.MetaPathFinder, importlib.abc.Loader):
-    """Intercepts `import bitsandbytes` and raises a clear error."""
-
     BLOCKED = {"bitsandbytes"}
 
     def find_module(self, fullname, path=None):
         top = fullname.split(".")[0]
         if top in self.BLOCKED:
             return self
-        return None
 
     def load_module(self, fullname):
         raise ImportError(
             f"'{fullname}' is blocked on RDNA2 (gfx1030). "
             "bitsandbytes / adamw8bit are CUDA-only and will segfault on AMD HIP. "
-            "Use adafactor instead.  To unblock: unset BITSANDBYTES_BLOCKED"
+            "Use adafactor instead. To unblock: unset BITSANDBYTES_BLOCKED"
         )
-
-
-import os as _os
-
-if _os.environ.get("BITSANDBYTES_BLOCKED", "0") == "1":
-    sys.meta_path.insert(0, _BitsAndBytesBlocker())
 ```
 
-### 7. Diagnostic Script
+#### 7. Diagnostic Script
 
-Created `diagnostics.py` — validates the full stack. Run modes:
-- `python diagnostics.py` — full check (env, PyTorch, bitsandbytes, models, custom nodes, dimensions)
-- `python diagnostics.py --quick` — pre-flight only (env + PyTorch), used by `launch.sh`
+`diagnostics.py` — validates the full stack. Checks:
 
-Checks performed:
+| Check | Type | Details |
+|---|---|---|
+| `HSA_OVERRIDE_GFX_VERSION` | Error | Must be `10.3.0` |
+| Expandable segments | Error | `PYTORCH_ALLOC_CONF` set |
+| `MIOPEN_FIND_MODE` | Warn | Should be `2` |
+| PyTorch version | Info | Prints version string |
+| HIP version | Error | `torch.version.hip` must not be None |
+| `torch.cuda.is_available()` | Error | ROCm HIP device must be visible |
+| GPU name & VRAM | Info | Prints device name and total memory |
+| Device is RX 6800 XT | Warn | Checks "6800" in device name |
+| HIP tensor compute | Error | 256×256 matmul smoke test |
+| SDPA available | Error | `scaled_dot_product_attention` importable |
+| bitsandbytes not installed | Error | Import must fail |
+| Transformer GGUF present | Warn | Checks `diffusion_models/ltx-2.3/` |
+| Text Encoder GGUF present | Warn | Checks `text_encoders/ltx-2.3/` |
+| VAE present | Warn | Checks `vae/ltx-2.3/` |
+| Custom node directories | Warn | Both ComfyUI-GGUF and ID-LoRA present |
 
-| Check                              | Type   | Details                                             |
-|------------------------------------|--------|-----------------------------------------------------|
-| HSA_OVERRIDE_GFX_VERSION           | Error  | Must be `10.3.0`                                    |
-| Expandable segments                | Error  | PYTORCH_ALLOC_CONF set                              |
-| MIOPEN_FIND_MODE                   | Warn   | Should be `2`                                       |
-| PyTorch version                    | Info   | Prints version string                               |
-| HIP version                        | Error  | torch.version.hip must not be None                  |
-| torch.cuda.is_available()          | Error  | ROCm HIP device must be visible                     |
-| GPU name & VRAM                    | Info   | Prints device name and total memory                 |
-| Device is RX 6800 XT               | Warn   | Checks "6800" in device name                        |
-| HIP tensor compute                 | Error  | 256x256 matmul smoke test on GPU                    |
-| SDPA available                     | Error  | scaled_dot_product_attention importable              |
-| bitsandbytes not installed         | Error  | Import must fail                                    |
-| Transformer GGUF present           | Warn   | Checks diffusion_models/ltx-2.3/                    |
-| Text Encoder GGUF present          | Warn   | Checks text_encoders/ltx-2.3/                       |
-| VAE present                        | Warn   | Checks vae/ltx-2.3/                                 |
-| ComfyUI-GGUF node                  | Warn   | Directory exists in custom_nodes/                    |
-| ID-LoRA-LTX2.3-ComfyUI node       | Warn   | Directory exists in custom_nodes/                    |
-| Video dimension constraints        | Info   | Reminder: all dims must be multiples of 32           |
-
-```python
-#!/usr/bin/env python3
-"""
-Diagnostic script for LTX-2.3 on RDNA2 (gfx1030) — AMD Radeon RX 6800 XT.
-Run standalone:   python diagnostics.py
-Run quick check:  python diagnostics.py --quick
-"""
-
-import os
-import sys
-import argparse
-
-OK   = "\033[92m✓\033[0m"
-FAIL = "\033[91m✗\033[0m"
-WARN = "\033[93m!\033[0m"
-
-errors: list[str] = []
-warnings: list[str] = []
-
-
-def check(label: str, condition: bool, error_msg: str = "", warn_only: bool = False):
-    if condition:
-        print(f"  {OK} {label}")
-    elif warn_only:
-        print(f"  {WARN} {label} — {error_msg}")
-        warnings.append(error_msg)
-    else:
-        print(f"  {FAIL} {label} — {error_msg}")
-        errors.append(error_msg)
-
-
-def check_env():
-    print("\n── Environment Variables ──")
-    hsa = os.environ.get("HSA_OVERRIDE_GFX_VERSION", "")
-    check("HSA_OVERRIDE_GFX_VERSION=10.3.0", hsa == "10.3.0",
-          f"Got '{hsa}'. Set: export HSA_OVERRIDE_GFX_VERSION=10.3.0")
-
-    alloc = os.environ.get("PYTORCH_ALLOC_CONF", "") or os.environ.get("PYTORCH_HIP_ALLOC_CONF", "")
-    check("Expandable segments enabled", "expandable_segments:True" in alloc,
-          "Set: export PYTORCH_ALLOC_CONF='expandable_segments:True'")
-
-    miopen = os.environ.get("MIOPEN_FIND_MODE", "")
-    check("MIOPEN_FIND_MODE=2", miopen == "2",
-          f"Got '{miopen}'. Set: export MIOPEN_FIND_MODE=2", warn_only=True)
-
-
-def check_pytorch():
-    print("\n── PyTorch / HIP ──")
-    try:
-        import torch
-    except ImportError:
-        check("PyTorch importable", False, "torch not installed in this venv")
-        return
-
-    check(f"PyTorch version: {torch.__version__}", True)
-
-    hip_version = getattr(torch.version, "hip", None)
-    check(f"HIP version: {hip_version}", hip_version is not None,
-          "torch.version.hip is None — this is not a ROCm build of PyTorch")
-
-    has_cuda = torch.cuda.is_available()
-    check("torch.cuda.is_available() [ROCm HIP]", has_cuda,
-          "No HIP device visible. Check ROCm install and HSA_OVERRIDE_GFX_VERSION.")
-
-    if has_cuda:
-        name = torch.cuda.get_device_name(0)
-        vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        check(f"GPU: {name} ({vram_gb:.1f} GB)", True)
-
-        is_6800xt = "6800" in name
-        check("Device is RX 6800 XT", is_6800xt,
-              f"Expected 6800 XT, got: {name}", warn_only=True)
-
-        try:
-            t = torch.randn(256, 256, device="cuda")
-            result = torch.mm(t, t)
-            del t, result
-            torch.cuda.empty_cache()
-            check("HIP tensor compute (256×256 matmul)", True)
-        except Exception as e:
-            check("HIP tensor compute", False, str(e))
-
-        try:
-            from torch.nn.functional import scaled_dot_product_attention  # noqa: F401
-            check("scaled_dot_product_attention (SDPA) available", True)
-        except ImportError:
-            check("SDPA available", False, "Upgrade PyTorch ≥2.0 for SDPA support")
-
-
-def check_bnb_blocked():
-    print("\n── Safety: bitsandbytes ──")
-    try:
-        import bitsandbytes  # noqa: F401
-        check("bitsandbytes NOT importable (good on RDNA2)", False,
-              "bitsandbytes is installed — it WILL crash on RDNA2. "
-              "Run: pip uninstall bitsandbytes")
-    except ImportError:
-        check("bitsandbytes not installed (safe)", True)
-
-
-def check_models():
-    print("\n── Model Files ──")
-    base = os.path.join(os.path.dirname(__file__), "ComfyUI", "models")
-
-    models = {
-        "LTX-2.3 Transformer (GGUF Q3_K_M)": (
-            os.path.join(base, "diffusion_models", "ltx-2.3"),
-            ["ltx-video-2b-v0.9.5-Q3_K_M.gguf",
-             "ltx-2.3-22B-Q3_K_M.gguf",
-             "ltxv-22b-0.9.7-dev-Q3_K_M.gguf"],
-        ),
-        "Text Encoder (Gemma-3 GGUF Q4_K_M)": (
-            os.path.join(base, "text_encoders", "ltx-2.3"),
-            ["gemma-3-12b-it-Q4_K_M.gguf",
-             "Gemma-3-12B-IT-Q4_K_M.gguf"],
-        ),
-        "VAE": (
-            os.path.join(base, "vae", "ltx-2.3"),
-            [],
-        ),
-    }
-
-    for label, (directory, expected_names) in models.items():
-        if not os.path.isdir(directory):
-            check(label, False, f"Directory missing: {directory}", warn_only=True)
-            continue
-
-        files = [f for f in os.listdir(directory) if not f.startswith(".")]
-        if not files:
-            check(label, False, f"No files in {directory}", warn_only=True)
-        elif expected_names:
-            found = any(f in files for f in expected_names)
-            check(f"{label}: {files[0] if files else '?'}", found or len(files) > 0,
-                  f"Found {files} but expected one of {expected_names}", warn_only=True)
-        else:
-            check(f"{label}: {files[0]}", True)
-
-
-def check_custom_nodes():
-    print("\n── Custom Nodes ──")
-    nodes_dir = os.path.join(os.path.dirname(__file__), "ComfyUI", "custom_nodes")
-    required = {
-        "ComfyUI-GGUF": "GGUF model loading for quantised transformer + text encoder",
-        "ID-LoRA-LTX2.3-ComfyUI": "LoRA patching for LTX-2.3 identity preservation",
-    }
-    for dirname, purpose in required.items():
-        path = os.path.join(nodes_dir, dirname)
-        check(f"{dirname} — {purpose}", os.path.isdir(path),
-              f"Missing: git clone into {nodes_dir}/{dirname}", warn_only=True)
-
-
-def check_dimension_util():
-    print("\n── Video Dimension Constraints ──")
-    print("  ℹ All width/height values MUST be multiples of 32 on HIP/RDNA2.")
-    print("    Valid examples: 512×320, 768×512, 1024×576")
-    print("    Invalid: 720×480 (480 % 32 ≠ 0) → use 736×480 or 720×512")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="LTX-2.3 RDNA2 diagnostics")
-    parser.add_argument("--quick", action="store_true",
-                        help="Only check env + PyTorch (for launch pre-flight)")
-    args = parser.parse_args()
-
-    print("=" * 60)
-    print(" LTX-2.3 / RDNA2 (gfx1030) Diagnostic Report")
-    print("=" * 60)
-
-    check_env()
-    check_pytorch()
-
-    if not args.quick:
-        check_bnb_blocked()
-        check_models()
-        check_custom_nodes()
-        check_dimension_util()
-
-    print("\n" + "=" * 60)
-    if errors:
-        print(f" {FAIL} {len(errors)} error(s), {len(warnings)} warning(s)")
-        for e in errors:
-            print(f"    → {e}")
-        sys.exit(1)
-    elif warnings:
-        print(f" {WARN} 0 errors, {len(warnings)} warning(s) — OK to proceed")
-        sys.exit(0)
-    else:
-        print(f" {OK} All checks passed")
-        sys.exit(0)
-
-
-if __name__ == "__main__":
-    main()
-```
-
-### 8. Launch Script
-
-Created `launch.sh` — single-command launcher that sources `env.sh`, runs quick diagnostics, and starts ComfyUI with RDNA2-optimized flags.
+#### 8. Launch Script (ROCm era)
 
 ```bash
-#!/usr/bin/env bash
-# ─────────────────────────────────────────────────────────────────────────────
-# Launch ComfyUI — LTX-2.3 on RDNA2 (RX 6800 XT, 16GB)
-# ─────────────────────────────────────────────────────────────────────────────
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Load RDNA2 environment variables.
-source "$SCRIPT_DIR/env.sh"
-
-# ── Pre-flight checks ───────────────────────────────────────────────────────
-python "$SCRIPT_DIR/diagnostics.py" --quick || {
-    echo "ERROR: Diagnostics failed. Fix the issues above before launching."
-    exit 1
-}
-
-# ── Launch ───────────────────────────────────────────────────────────────────
-cd "$SCRIPT_DIR/ComfyUI"
-
 exec python main.py \
     --listen \
     --use-pytorch-cross-attention \
@@ -588,88 +303,63 @@ exec python main.py \
     "$@"
 ```
 
-**Launch flags explained:**
+**`--lowvram` was required on the 16 GB RX 6800 XT.** Without it the transformer stays in
+VRAM during VAE decode, leaving only ~1 GB free — insufficient for the 1.9 GB tiled
+allocation.
 
-| Flag | Purpose |
-|---|---|
-| `--listen` | Bind to 0.0.0.0 for network access |
-| `--use-pytorch-cross-attention` | Use SDPA — native, no xformers needed |
-| `--reserve-vram 2.5` | Reserve 2.5 GB for OS/driver |
-| `--lowvram` | **Required** — forces transformer to offload to CPU before VAE decode, creating headroom for tiled decode on 16 GB |
+#### 9. Model Download Helper
 
-### 9. Model Download Helper
-
-Created `download_models.sh` — prints `huggingface-cli download` commands for review before execution. Does not auto-download.
+`download_models.sh` — prints `huggingface-cli download` commands for review before execution.
 
 **Validated model inventory for 16 GB VRAM:**
 
-| Model | File | Size | Source | Target Directory |
-|---|---|---|---|---|
-| LTX-2.3-22B Transformer | `ltx-2.3-22b-dev-Q3_K_M.gguf` | 11 GB | `unsloth/LTX-2.3-GGUF` | `models/diffusion_models/ltx-2.3/` |
-| Gemma-3-12B-IT Text Encoder | `google_gemma-3-12b-it-Q4_K_M.gguf` | 6.8 GB | `Kijai/LTX2.3_comfy` | `models/text_encoders/ltx-2.3/` |
-| LTX Text Projection (Embeddings Connector) | `ltx-2.3_text_projection_bf16.safetensors` | 2.2 GB | `Kijai/LTX2.3_comfy` | `models/text_encoders/ltx-2.3/` |
-| LTX VAE | `LTX23_video_vae_bf16.safetensors` | 1.4 GB | `Kijai/LTX2.3_comfy` | `models/vae/ltx-2.3/` |
-| ID-LoRA weights (optional) | TBD | ~1.1 GB | TBD | `models/loras/ltx-2.3/` |
+| Model | File | Size | Source |
+|---|---|---|---|
+| LTX-2.3-22B Transformer | `ltx-2.3-22b-dev-Q3_K_M.gguf` | 11 GB | `unsloth/LTX-2.3-GGUF` (NOT `Lightricks/LTX-Video-2.3-22B-GGUF` — that repo does not exist) |
+| Gemma-3-12B-IT Text Encoder | `google_gemma-3-12b-it-Q4_K_M.gguf` | 6.8 GB | `Kijai/LTX2.3_comfy` |
+| LTX Text Projection | `ltx-2.3_text_projection_bf16.safetensors` | 2.2 GB | `Kijai/LTX2.3_comfy` |
+| LTX VAE | `LTX23_video_vae_bf16.safetensors` | 1.4 GB | `Kijai/LTX2.3_comfy` |
+| ID-LoRA weights | *(not yet downloaded)* | ~1.1 GB | `Lightricks/LTX-Video-2.3` |
 
-**Important notes:**
-- The original `download_models.sh` referenced incorrect repo names. Use the sources above.
-- The full fp16 checkpoint (`ltx-2.3-22b-dev.safetensors`) is 43 GB — do not download, incompatible with 16 GB VRAM.
-- The text projection file is **required** alongside the Gemma GGUF. Without it `DualCLIPLoaderGGUF` produces a tensor dimension mismatch at the sampler.
-- `huggingface-cli` creates a nested subdirectory on download. Move files up one level afterward:
-  ```bash
-  mv ~/comfy/ComfyUI/models/text_encoders/ltx-2.3/text_encoders/ltx-2.3_text_projection_bf16.safetensors \
-     ~/comfy/ComfyUI/models/text_encoders/ltx-2.3/
-  ```
+Full fp16 checkpoint (`ltx-2.3-22b-dev.safetensors`) is 43 GB — incompatible with 16 GB VRAM, not downloaded.
 
-### 10. Workflow Reference Config
+#### 10. Workflow Reference Config
 
-Created `comfyui_rdna2.yaml` — documents recommended ComfyUI node settings for workflows. Not consumed by ComfyUI directly; serves as a human-readable reference for configuring nodes in the UI.
-
-**Important:** LTX-2.3 is an audio-video model. The standard `CLIPLoaderGGUF` + `KSampler` pipeline does **not** work — it produces a tensor dimension mismatch at the sampler. The correct pipeline uses LTX-specific nodes built into ComfyUI core.
+`comfyui_rdna2.yaml` — documents recommended ComfyUI node settings for the RDNA2 configuration.
 
 ```yaml
 # ComfyUI Workflow Defaults — LTX-2.3 on RDNA2 (RX 6800 XT, 16 GB)
 # VALIDATED — end-to-end smoke test passed
 
 transformer:
-  node: "UnetLoaderGGUF"            # from ComfyUI-GGUF
+  node: "UnetLoaderGGUF"
   model: "ltx-2.3/ltx-2.3-22b-dev-Q3_K_M.gguf"
 
 text_encoder:
-  node: "DualCLIPLoaderGGUF"        # from ComfyUI-GGUF — NOT CLIPLoaderGGUF (single)
+  node: "DualCLIPLoaderGGUF"          # NOT CLIPLoaderGGUF (single)
   clip_name1: "ltx-2.3/google_gemma-3-12b-it-Q4_K_M.gguf"
   clip_name2: "ltx-2.3/ltx-2.3_text_projection_bf16.safetensors"  # REQUIRED
   type: "ltxv"
 
 conditioning:
-  node: "LTXVConditioning"          # LTX-specific — NOT CLIPTextEncode
+  node: "LTXVConditioning"             # NOT CLIPTextEncode
 
 scheduler:
-  node: "LTXVScheduler"             # LTX-specific — NOT BasicScheduler
+  node: "LTXVScheduler"               # NOT BasicScheduler
 
 sampler:
-  node: "SamplerCustomAdvanced"     # NOT KSampler
+  node: "SamplerCustomAdvanced"        # NOT KSampler
 
 vae:
-  node: "VAEDecodeTiled"            # mandatory for 16 GB — never use VAEDecode
-  tile_size: 256                    # 512 causes OOM — do not increase
+  node: "VAEDecodeTiled"
+  tile_size: 256                       # 512 causes OOM — do not increase
   temporal_size: 32
-
-cross_attention:
-  backend: "scaled_dot_product_attention"   # SDPA — native PyTorch >= 2.0
-
-optimizer:
-  use: "adafactor"
-  block:
-    - "adamw8bit"       # CUDA-only — segfaults on RDNA2
-    - "bitsandbytes"    # CUDA-only — no HIP support
 
 dimension_presets:
   - { name: "square",       width: 512,  height: 512  }   # validated baseline
   - { name: "landscape_hd", width: 768,  height: 512  }
   - { name: "portrait_hd",  width: 512,  height: 768  }
   - { name: "wide",         width: 1024, height: 576  }
-  # All dimensions must be multiples of 32
 
 frame_counts:
   # Formula: 1 + 8N (minimum N=2 → 17 frames)
@@ -679,233 +369,503 @@ frame_counts:
   - 49
 ```
 
----
+### VRAM Budget — RX 6800 XT
 
-## All Installed Packages
-
-Complete `pip list` output from the venv (145 packages):
-
-```
-Package                                Version          Source
-─────────────────────────────────────  ───────────────  ──────────────────────
-accelerate                             1.13.0           PyPI
-aiohappyeyeballs                       2.6.1            PyPI
-aiohttp                                3.13.4           PyPI
-aiosignal                              1.4.0            PyPI
-albucore                               0.0.24           PyPI
-albumentations                         2.0.8            PyPI
-alembic                                1.18.4           PyPI
-annotated-doc                          0.0.4            PyPI
-annotated-types                        0.7.0            PyPI
-anyio                                  4.13.0           PyPI
-async-timeout                          5.0.1            PyPI
-attrs                                  26.1.0           PyPI
-av                                     17.0.0           PyPI
-blake3                                 1.0.8            PyPI
-certifi                                2026.2.25        PyPI
-charset-normalizer                     3.4.6            PyPI
-click                                  8.2.1            PyPI
-coloredlogs                            15.0.1           PyPI
-comfy-aimdo                            0.2.12           PyPI
-comfy-kitchen                          0.2.8            PyPI
-comfyui-embedded-docs                  0.4.3            PyPI
-comfyui_frontend_package               1.42.8           PyPI
-comfyui_workflow_templates             0.9.39           PyPI
-comfyui-workflow-templates-core        0.3.188          PyPI
-comfyui-workflow-templates-media-api   0.3.68           PyPI
-comfyui-workflow-templates-media-image 0.3.114          PyPI
-comfyui-workflow-templates-media-other 0.3.161          PyPI
-comfyui-workflow-templates-media-video 0.3.68           PyPI
-contourpy                              1.3.2            PyPI
-cycler                                 0.12.1           PyPI
-Cython                                 3.2.4            PyPI
-easydict                               1.13             PyPI
-einops                                 0.8.2            PyPI
-exceptiongroup                         1.3.1            PyPI
-filelock                               3.25.2           PyPI
-flatbuffers                            25.12.19         PyPI
-fonttools                              4.62.1           PyPI
-frozenlist                             1.8.0            PyPI
-fsspec                                 2026.2.0         PyPI
-gguf                                   0.18.0           PyPI
-gitdb                                  4.0.12           PyPI
-GitPython                              3.1.46           PyPI
-glfw                                   2.10.0           PyPI
-greenlet                               3.3.2            PyPI
-h11                                    0.16.0           PyPI
-hf-xet                                 1.4.2            PyPI
-httpcore                               1.0.9            PyPI
-httpx                                  0.28.1           PyPI
-huggingface_hub                        1.8.0            PyPI
-humanfriendly                          10.0             PyPI
-idna                                   3.11             PyPI
-ImageIO                                2.37.3           PyPI
-imageio-ffmpeg                         0.6.0            PyPI
-insightface                            0.7.3            PyPI
-Jinja2                                 3.1.6            PyPI
-joblib                                 1.5.3            PyPI
-kiwisolver                             1.5.0            PyPI
-kornia                                 0.8.2            PyPI
-kornia_rs                              0.1.10           PyPI
-lazy-loader                            0.5              PyPI
-ltx-core                               1.0.0            PyPI
-ltx-pipelines                          1.0.0            PyPI
-ltx-trainer                            1.0.0            Source (ID-LoRA repo)
-Mako                                   1.3.10           PyPI
-markdown-it-py                         4.0.0            PyPI
-MarkupSafe                             3.0.3            PyPI
-matplotlib                             3.10.8           PyPI
-mdurl                                  0.1.2            PyPI
-ml_dtypes                              0.5.4            PyPI
-mpmath                                 1.3.0            PyPI
-multidict                              6.7.1            PyPI
-networkx                               3.4.2            PyPI
-ninja                                  1.13.0           PyPI
-numpy                                  2.2.6            PyPI
-onnx                                   1.21.0           PyPI
-onnxruntime                            1.23.2           PyPI
-opencv-python                          4.13.0.92        PyPI
-opencv-python-headless                 4.13.0.92        PyPI
-optimum-quanto                         0.2.7            PyPI
-packaging                              26.0             PyPI
-pandas                                 2.3.3            PyPI
-peft                                   0.18.1           PyPI
-pillow                                 12.1.1           PyPI
-pillow_heif                            1.3.0            PyPI
-pip                                    26.0.1           PyPI
-platformdirs                           4.9.4            PyPI
-prettytable                            3.17.0           PyPI
-propcache                              0.4.1            PyPI
-protobuf                               6.33.6           PyPI
-psutil                                 7.2.2            PyPI
-pydantic                               2.12.5           PyPI
-pydantic_core                          2.41.5           PyPI
-pydantic-settings                      2.13.1           PyPI
-Pygments                               2.20.0           PyPI
-PyOpenGL                               3.1.10           PyPI
-pyparsing                              3.3.2            PyPI
-python-dateutil                        2.9.0.post0      PyPI
-python-dotenv                          1.2.2            PyPI
-pytorch-triton-rocm                    3.5.1            PyPI
-pytz                                   2026.1.post1     PyPI
-PyYAML                                 6.0.3            PyPI
-regex                                  2026.3.32        PyPI
-requests                               2.33.1           PyPI
-rich                                   14.3.3           PyPI
-safetensors                            0.7.0            PyPI
-scenedetect                            0.6.7.1          PyPI
-scikit-image                           0.25.2           PyPI
-scikit-learn                           1.7.2            PyPI
-scipy                                  1.15.3           PyPI
-sentencepiece                          0.2.1            PyPI
-sentry-sdk                             2.57.0           PyPI
-setuptools                             82.0.1           PyPI
-shellingham                            1.5.4            PyPI
-simpleeval                             1.0.7            PyPI
-simsimd                                6.5.16           PyPI
-six                                    1.17.0           PyPI
-smmap                                  5.0.3            PyPI
-spandrel                               0.4.2            PyPI
-SQLAlchemy                             2.0.48           PyPI
-stringzilla                            4.6.0            PyPI
-sympy                                  1.14.0           PyPI
-threadpoolctl                          3.6.0            PyPI
-tifffile                               2025.5.10        PyPI
-tokenizers                             0.22.2           PyPI
-tomli                                  2.4.1            PyPI
-torch                                  2.9.1+rocm6.3   ROCm wheel
-torchaudio                             2.9.1+rocm6.3   ROCm wheel
-torchcodec                             0.11.0           PyPI
-torchsde                               0.2.6            PyPI
-torchvision                            0.24.1+rocm6.3   ROCm wheel
-tqdm                                   4.67.3           PyPI
-trampoline                             0.1.2            PyPI
-transformers                           5.4.0            PyPI
-typer                                  0.24.1           PyPI
-typing_extensions                      4.15.0           PyPI
-typing-inspection                      0.4.2            PyPI
-tzdata                                 2025.3           PyPI
-urllib3                                2.6.3            PyPI
-wandb                                  0.25.1           PyPI
-wcwidth                                0.6.0            PyPI
-wheel                                  0.46.3           PyPI
-yarl                                   1.23.0           PyPI
-```
-
----
-
-## All Files Created
-
-| File                     | Type   | Purpose                                                           |
-|--------------------------|--------|-------------------------------------------------------------------|
-| `env.sh`                 | Bash   | RDNA2 environment variables — source before every session         |
-| `launch.sh`              | Bash   | One-command launcher with pre-flight diagnostics                  |
-| `diagnostics.py`         | Python | Hardware/software validation (full and quick modes)               |
-| `block_bitsandbytes.py`  | Python | Import hook to block bitsandbytes on RDNA2                        |
-| `download_models.sh`     | Bash   | Prints model download commands for review                         |
-| `comfyui_rdna2.yaml`     | YAML   | Reference config for recommended workflow node settings            |
-| `README.md`              | MD     | This documentation file                                           |
-
----
-
-## VRAM Budget
-
-16 GB total on the RX 6800 XT. Aggressive offloading is required to fit within budget:
+16 GB total. Aggressive offloading required.
 
 | Component | GPU Memory |
 |---|---|
 | LTX-2.3-22B Transformer (GGUF Q3_K_M) | ~11.0 GB |
 | Text Projection / Embeddings Connector | ~2.2 GB |
-| VAE decode (tiled 256x32) | ~1.9 GB |
-| **PEAK during sampling** | **~13.2 GB (79%)** |
+| VAE decode (tiled 256×32) | ~1.9 GB |
+| **Peak during sampling** | **~13.2 GB (79%)** |
 | Text Encoder (Gemma-3 Q4_K_M) | CPU offload (0 GB GPU) |
-| Transformer during VAE decode (--lowvram) | CPU offload (0 GB GPU) |
+| Transformer during VAE decode | CPU offload via `--lowvram` (0 GB GPU) |
 
-**`--lowvram` is required.** Without it the transformer stays in VRAM during VAE decode,
-leaving only ~1 GB free — insufficient for the 1.9 GB tiled allocation. With it, the
-pipeline sequences correctly: encode → offload transformer → VAE decode.
+`--lowvram` was the critical flag. The sequence: encode → offload transformer to CPU → VAE
+decode. Without it, OOM.
+
+### Known Caveats — ROCm
+
+1. **`expandable_segments` not yet active on RDNA2/HIP.** Set for forward compatibility;
+   PyTorch 2.9.1+rocm6.3 prints a harmless warning. Auto-resolves if ROCm HIP adds support.
+
+2. **`bitsandbytes` is a transitive dependency of `ltx-trainer`.** Uninstall immediately
+   after any re-install: `pip uninstall bitsandbytes -y`.
+
+3. **`transformers` 5.4.0.** ID-LoRA README flags potential 5.x incompatibility. No issues
+   observed during text-to-video inference. If `AttributeError` appears during LoRA loading:
+   `pip install 'transformers>=4.52,<5'`.
+
+4. **Standard ComfyUI `KSampler` pipeline does not work with LTX-2.3.** LTX-2.3 is an
+   audio-video model; `CLIPLoaderGGUF` (single) + `KSampler` produces a tensor dimension
+   mismatch. Always use `DualCLIPLoaderGGUF` + `LTXVConditioning` + `LTXVScheduler` +
+   `SamplerCustomAdvanced`.
+
+5. **Text projection file is required.** `ltx-2.3_text_projection_bf16.safetensors` (2.2 GB)
+   must sit alongside the Gemma GGUF in `models/text_encoders/ltx-2.3/`. Without it the
+   embedding shape is wrong.
+
+6. **Video dimensions must be multiples of 32.** Non-aligned values cause HIP memory access
+   faults. Safe presets: 512×512, 768×512, 1024×576.
+
+7. **Frame count formula: 1 + 8N.** Valid: 17, 25, 33, 49, 65... Minimum is 17 (N=2).
+
+8. **First inference is slow.** MIOpen compiles GPU kernels for gfx1030 on first use.
+   Expect 10-15 minutes on the very first generation; subsequent runs start in seconds.
+
+9. **ID-LoRA pipeline requires the full 43 GB safetensors checkpoint.** Not usable on 16 GB
+   VRAM as-is. Deferred.
+
+### All Installed Packages — ROCm Venv
+
+Full `pip list` preserved in `~/comfy/venv-rocm-pipfreeze.txt`. Highlights:
+
+```
+torch                  2.9.1+rocm6.3   ROCm wheel
+torchvision            0.24.1+rocm6.3  ROCm wheel
+torchaudio             2.9.1+rocm6.3   ROCm wheel
+pytorch-triton-rocm    3.5.1
+transformers           5.4.0
+safetensors            0.7.0
+accelerate             1.13.0
+ltx-core               1.0.0
+ltx-pipelines          1.0.0
+ltx-trainer            1.0.0           Source (ID-LoRA repo)
+peft                   0.18.1
+optimum-quanto         0.2.7
+gguf                   0.18.0
+sentencepiece          0.2.1
+diffusers              0.38.0
+opencv-python          4.13.0.92
+numpy                  2.2.6
+huggingface_hub        1.8.0
+wandb                  0.25.1
+insightface            0.7.3
+```
+
+---
+
+## Phase 2 — RTX 3090 / CUDA Rebuild
+
+### Why the Rebuild
+
+The RTX 3090 (24 GB) was physically installed in chuckai alongside the RX 6800 XT. An audit
+in May 2026 revealed that `torch.cuda.is_available()` returned `False` on the 3090 — the
+existing venv (`torch 2.9.1+rocm6.3`) was built exclusively for AMD HIP and had no awareness
+of the NVIDIA device. `nvidia-smi` confirmed the 3090 was present and driver-ready; only
+PyTorch was blind to it.
+
+The 3090's 24 GB VRAM vs the 6800 XT's 16 GB makes it the better choice for all video
+generation work: larger models fit without aggressive offloading, higher resolutions become
+viable, and CUDA's ecosystem (sageattention, flash-attn, xformers) is more mature than ROCm's.
+
+### What Was Done — Phase 2
+
+**Phase 0 — Backups taken before any changes:**
+```
+~/comfy/env.sh.rocm-backup              # original AMD env
+~/comfy/launch.sh.rocm-backup           # original AMD launch
+~/comfy/venv-rocm-pipfreeze.txt         # full pip freeze of ROCm venv
+```
+
+**Phase 1 — Wiped** `~/comfy/venv` (the ROCm venv).
+
+**Phase 2 — Created** fresh Python 3.10 venv:
+```bash
+python3.10 -m venv ~/comfy/venv
+```
+
+**Phase 3 — Installed** CUDA PyTorch:
+```bash
+pip install torch==2.6.0+cu124 torchvision==0.21.0+cu124 torchaudio==2.6.0+cu124 \
+    --index-url https://download.pytorch.org/whl/cu124
+```
+Pulled in as dependencies: `triton 3.2.0`, `nvidia-cudnn-cu12 9.1.0`.
+
+**Phase 4 — Installed** ComfyUI requirements plus `accelerate` and `gguf`:
+```bash
+pip install -r ~/comfy/ComfyUI/requirements.txt
+pip install accelerate gguf
+```
+
+**Phase 5 — Updated** ComfyUI itself from commit `076639fe` (2026-03-30) to `2806163f`
+(2026-05-04) — was 141 commits behind HEAD. Notable additions in those commits: Wan 2.2
+blueprint, SAM3 nodes, CogVideo, SUPIR, frame interpolation, LTX-2.3 I2V/T2V blueprints.
+
+**Phase 6 — Cloned and installed** additional custom nodes needed for Wan 2.2 and
+ongoing work:
+
+| Node | Commit | Purpose |
+|---|---|---|
+| ComfyUI-Manager (ltdrdata) | `8d5c1203` | Node management |
+| ComfyUI-WanVideoWrapper (kijai) | `df8f3e4` | Wan 2.2 support |
+| ComfyUI-KJNodes (kijai) | `cd5ad80` | Utility nodes for Wan pipeline |
+| ComfyUI-VideoHelperSuite (Kosinkadink) | `2984ec4` | MP4 output |
+
+WanVideoWrapper pulled in: `diffusers 0.38.0`, `peft`, `opencv-python`,
+`safetensors 0.8.0rc0`.
+
+**Phase 7 — Rewrote** `~/comfy/env.sh` for CUDA:
+
+```bash
+#!/usr/bin/env bash
+# ComfyUI — CUDA (RTX 3090) Environment
+# source this before launching ComfyUI
+
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+export HF_HUB_DISABLE_TELEMETRY=1
+export DO_NOT_TRACK=1
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/venv/bin/activate"
+
+python -c "import torch; print('✓ torch', torch.__version__, '| CUDA', torch.version.cuda, '| GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NOT FOUND')"
+```
+
+Key changes from ROCm version: removed `HSA_OVERRIDE_GFX_VERSION`, `MIOPEN_*`, and
+`COMFYUI_ENABLE_MIOPEN`; replaced `PYTORCH_HIP_ALLOC_CONF` with
+`PYTORCH_CUDA_ALLOC_CONF`.
+
+**Phase 8 — Rewrote** `~/comfy/launch.sh` for CUDA:
+
+```bash
+exec python main.py \
+    --listen \
+    --use-pytorch-cross-attention \
+    --reserve-vram 1.0 \
+    "$@"
+```
+
+Key changes from ROCm version: removed `--lowvram` (unnecessary on 24 GB); changed
+`--reserve-vram 2.5` → `1.0` (the 3090 has ample headroom).
+
+**Phase 9 — Smoke test PASSED:**
+- ComfyUI v0.20.1 started in 8 seconds
+- `/system_stats` confirmed: `device_type: cuda`, GPU `NVIDIA GeForce RTX 3090`,
+  `vram_total: 23.6 GiB`, `pytorch_version: 2.6.0+cu124`
+- No ROCm references in startup log
+- All custom nodes loaded (one exception: `ID-LoRA-LTX2.3-ComfyUI` — see below)
+
+### Component Versions (CUDA Era)
+
+| Package | Version | Notes |
+|---|---|---|
+| torch | 2.6.0+cu124 | CUDA build |
+| torchvision | 0.21.0+cu124 | |
+| torchaudio | 2.6.0+cu124 | |
+| triton | 3.2.0 | |
+| nvidia-cudnn-cu12 | 9.1.0 | |
+| transformers | 5.4.0 | Carried over |
+| safetensors | 0.8.0rc0 | Upgraded by WanVideoWrapper |
+| accelerate | current | |
+| diffusers | 0.38.0 | Pulled in by WanVideoWrapper |
+| gguf | current | |
+| peft | current | |
+| opencv-python | current | |
+
+### Custom Nodes — Current
+
+| Node | Commit | Status |
+|---|---|---|
+| ComfyUI-GGUF (city96) | `6ea2651` (2026-01-12) | ✅ OK |
+| ComfyUI-Manager (ltdrdata) | `8d5c1203` (2026-05-01) | ✅ OK |
+| ComfyUI-WanVideoWrapper (kijai) | `df8f3e4` (2026-02-22) | ✅ OK |
+| ComfyUI-KJNodes (kijai) | `cd5ad80` (2026-05-03) | ✅ OK |
+| ComfyUI-VideoHelperSuite (Kosinkadink) | `2984ec4` (2026-04-06) | ✅ OK |
+| ID-LoRA-LTX2.3-ComfyUI | `9943746` (2026-03-25) | ⚠️ IMPORT FAIL — `ltx_core` not installed. Does not affect Wan 2.2 or LTX text-to-video. ComfyUI skips gracefully. Fix when LTX ID-LoRA work resumes: `pip install ltx-core ltx-pipelines && pip install -e ~/ID-LoRA/ID-LoRA-2.3/packages/ltx-trainer && pip uninstall bitsandbytes -y` |
+
+**Known cosmetic startup warning:**
+`ComfyUI-GGUF: Partial torch compile only, consider updating pytorch` — informational only.
+Inference works fine on torch 2.6. Do not bump to 2.7+ without validating sageattention
+and flash-attn wheel compatibility.
+
+### LTX-2.3 Pipeline (Re-validated on CUDA)
+
+All four LTX-2.3 model files from Phase 1 are present in `ComfyUI/models/`. The pipeline
+has not yet been run on the 3090 — the VRAM headroom has grown from 16 GB to 24 GB, so
+constraints loosen:
+
+- `--lowvram` is **no longer required** — test without it first
+- `tile_size=256` is still recommended; 512 may now work but is untested
+- Runtime will be faster than the ~3 min 15 sec baseline on the RX 6800 XT
+
+The node pipeline itself is unchanged from Phase 1:
+
+| Stage | Node |
+|---|---|
+| Transformer | `UnetLoaderGGUF` |
+| Text encoder | `DualCLIPLoaderGGUF` (both Gemma GGUF + text projection, type: `ltxv`) |
+| Conditioning | `LTXVConditioning` |
+| Scheduler | `LTXVScheduler` |
+| Sampler | `SamplerCustomAdvanced` |
+| VAE decode | `VAEDecodeTiled` (tile_size=256, temporal_size=32) |
+
+### VRAM Budget — RTX 3090
+
+| Component | GPU Memory |
+|---|---|
+| LTX-2.3-22B Transformer (GGUF Q3_K_M) | ~11.0 GB |
+| Text Projection / Embeddings Connector | ~2.2 GB |
+| VAE decode (tiled 256×32) | ~1.9 GB |
+| **Peak during sampling** | **~13.2 GB (55% of 24 GB)** |
+| Text Encoder (Gemma-3 Q4_K_M) | CPU offload |
+
+~10 GB of headroom vs the 16 GB RX 6800 XT configuration. Larger resolutions and longer
+frame counts are now viable without VRAM risk.
+
+---
+
+## Phase 3 — Wan 2.2 I2V Portrait Animation
+
+**Goal:** animate still photos of relatives. Wan 2.2 I2V 14B was selected over LTX-2.3 for
+this use case because identity preservation on faces is better in I2V models conditioned on
+an input frame, while LTX-2.3's strength is text-to-video. No audio needed.
+
+**Model selection rationale:**
+
+| Candidate | Reason considered | Decision |
+|---|---|---|
+| Wan 2.1 VACE 1.3B | Fast, already on disk in `~/videoforge/` | Set aside — VACE is for controlled video editing, not portrait animation |
+| Wan 2.2 I2V 14B GGUF | Best identity preservation; 14B scale; two-expert MoE | ✅ Selected |
+| LTX 2.3 | Already set up; fast | Set aside — text-to-video model, no input-image conditioning |
+
+### Key Finding — Two Loader Ecosystems
+
+An investigation of pre-existing VideoForge files (`~/videoforge/models/wan21-vace-1.3b/`)
+before downloading revealed a critical distinction that shaped all file decisions:
+
+**ComfyUI has two parallel loader paths for Wan models:**
+
+1. **Native ComfyUI loaders** (`Load CLIP`, `Load VAE`, `Unet Loader (GGUF)`) — accept
+   `umt5_xxl_fp8_e4m3fn_scaled.safetensors`. Used by all official Comfy-Org Wan templates
+   and by the GGUF pipeline.
+
+2. **WanVideoWrapper loaders** (`Load WanVideo T5 TextEncoder`, etc.) — reject the
+   fp8-scaled file. `LoadWanVideoT5TextEncoder` raises
+   `ValueError("fp8 scaled is not supported by this node")` if given the Comfy-Org file.
+   Requires bf16 format.
+
+GGUF transformers run through native loaders. The VideoForge bf16 `.pth` files would work
+with WanVideoWrapper but not with our pipeline. The Comfy-Org fp8-scaled safetensors is
+the correct choice for GGUF workflows — and it's the smaller file (6.7 GB vs 10.58 GB).
+
+**Decision: download everything fresh into `~/comfy/ComfyUI/models/` and keep VideoForge
+cleanly separated.** No symlinks, no `extra_model_paths.yaml`.
+
+### Model Inventory — Wan 2.2
+
+Downloads were in progress at session end. Verify completion:
+
+```bash
+ls -lah ~/comfy/ComfyUI/models/diffusion_models/wan2.2-i2v-A14B-*Noise-Q5_K_M.gguf
+ls -lah ~/comfy/ComfyUI/models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors
+ls -lah ~/comfy/ComfyUI/models/vae/wan_2.1_vae.safetensors
+ls -lah ~/comfy/ComfyUI/models/loras/Wan2.2-Lightning_I2V-A14B-4steps_*.safetensors
+```
+
+| File | Size | Source | Directory |
+|---|---|---|---|
+| `wan2.2-i2v-A14B-HighNoise-Q5_K_M.gguf` | ~10 GB | `bullerwins/Wan2.2-I2V-A14B-GGUF` | `diffusion_models/` |
+| `wan2.2-i2v-A14B-LowNoise-Q5_K_M.gguf` | ~10 GB | same | `diffusion_models/` |
+| `umt5_xxl_fp8_e4m3fn_scaled.safetensors` | ~6.7 GB | `Comfy-Org/Wan_2.1_ComfyUI_repackaged` | `text_encoders/` |
+| `wan_2.1_vae.safetensors` | ~250 MB | `Comfy-Org/Wan_2.2_ComfyUI_Repackaged` | `vae/` |
+| `Wan2.2-Lightning_I2V-A14B-4steps_HIGH.safetensors` | ~600 MB | `lightx2v/Wan2.2-Lightning` | `loras/` |
+| `Wan2.2-Lightning_I2V-A14B-4steps_LOW.safetensors` | ~600 MB | same | `loras/` |
+
+Total: ~28 GB. If download session `wan22-dl` is still running:
+```bash
+tmux attach -t wan22-dl    # Ctrl-b d to detach
+```
+
+### Workflow JSON
+
+`wan22_i2v_portrait_animation.json` was built and validated. Based on the official
+`Comfy-Org/workflow_templates video_wan2_2_14B_i2v.json` template with targeted modifications:
+
+| Change | Why |
+|---|---|
+| `UNETLoader` → `UnetLoaderGGUF` on both transformer nodes | Our transformers are GGUF format |
+| Filenames pre-set to our actual downloaded files | No dropdown confusion on first load |
+| Default resolution 640×640 → 832×480 | Better aspect ratio for portraits |
+| Frames: 81 (5 seconds @ 16 fps) | Baseline target duration |
+| `Enable 4steps LoRA?` default: OFF | Validate 20-step baseline before Lightning |
+| LoadImage filename cleared | Original had a demo filename that would error immediately |
+| Negative prompt rewritten in English targeting portrait failures | Original used Chinese text; new version specifically suppresses talking, lip sync, identity drift, and face morphing |
+| Markdown notes updated | Reflects GGUF path and actual file layout |
+
+**Loader node → filename mapping:**
+
+| Node | Filename |
+|---|---|
+| Load High-Noise Transformer (GGUF) | `wan2.2-i2v-A14B-HighNoise-Q5_K_M.gguf` |
+| Load Low-Noise Transformer (GGUF) | `wan2.2-i2v-A14B-LowNoise-Q5_K_M.gguf` |
+| CLIPLoader | `umt5_xxl_fp8_e4m3fn_scaled.safetensors` |
+| VAELoader | `wan_2.1_vae.safetensors` |
+| High-Noise Lightning LoRA | `Wan2.2-Lightning_I2V-A14B-4steps_HIGH.safetensors` |
+| Low-Noise Lightning LoRA | `Wan2.2-Lightning_I2V-A14B-4steps_LOW.safetensors` |
+
+### Wan 2.2 Pipeline Reference
+
+Wan 2.2 14B uses a **Mixture-of-Experts (MoE) architecture** with separate high-noise and
+low-noise expert transformers. They load and sample sequentially — ComfyUI offloads the
+inactive expert during the switch. Both files are required; neither alone is sufficient.
+
+**Sampler configuration:**
+
+| Mode | Steps | CFG | Split at | Time (3090) |
+|---|---|---|---|---|
+| Original (Lightning OFF) | 20 | 3.5 | step 10 | ~3-5 min |
+| Turbo (Lightning ON) | 4 | 1.0 | step 2 | ~30-60 sec |
+
+Use Original for finals. Use Lightning to scout whether a prompt direction or input photo
+will work before committing to a full render.
+
+**First-run failure modes:**
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Unknown node type: UnetLoaderGGUF` | ComfyUI-GGUF didn't import | Check `custom_nodes/ComfyUI-GGUF/` exists; restart |
+| Red filename in loader dropdown | File missing or wrong directory | Re-run verify commands above |
+| OOM at sampling | Resolution or frame count too large | Drop to 49 frames or 480×480 |
+| `Tensor size mismatch` | LoRA version mismatch | Confirm both LoRAs are I2V not T2V |
+| Pure noise output | ModelSamplingSD3 shift wrong | Both `ModelSamplingSD3` nodes should be 5.0 |
+| Identity drifts at ~frame 40 | Temporal coherence limit of 14B model | Drop to 49 frames; or lower CFG to 3.0 |
+
+### VRAM Budget — Wan 2.2
+
+| Component | GPU Memory |
+|---|---|
+| Wan 2.2 14B transformer (GGUF Q5_K_M, one expert at a time) | ~10-12 GB |
+| UMT5-XXL text encoder (fp8 scaled, CPU offloadable after encode) | ~6 GB |
+| Wan VAE decode | ~2-3 GB |
+| Latents + KV cache (81 frames @ 832×480) | ~2-3 GB |
+| **Expected peak** | **~16-20 GB — fits on 24 GB with `--reserve-vram 1.0`** |
+
+No `--lowvram` needed.
+
+---
+
+## Next Steps
+
+### Immediate — Wan 2.2 first inference
+
+1. Verify all six model files are present (commands in [Model Inventory](#model-inventory--wan-22) above)
+2. Launch ComfyUI: `~/comfy/launch.sh`
+3. Drag `wan22_i2v_portrait_animation.json` onto the canvas
+4. Verify each loader node's dropdown matches the filename table above
+5. Upload a portrait photo → queue the run (Lightning OFF for baseline)
+6. Evaluate: identity preservation, subtle motion, no talking artifacts
+7. If baseline is good, toggle Lightning ON and compare quality vs speed
+
+### Near-term
+
+- **Re-verify LTX-2.3 on the 3090.** The pipeline has never been run on CUDA. Should work
+  fine and be faster. Test `--lowvram` OFF first; the 24 GB headroom likely makes it
+  unnecessary.
+
+- **sageattention.** ~25-30% attention speedup on Ampere. Triton 3.2.0 is already in the
+  venv. Install, then switch `--use-pytorch-cross-attention` to `--use-sage-attention` in
+  `launch.sh`.
+
+- **Fix `ID-LoRA-LTX2.3-ComfyUI` import.** When LTX identity work resumes:
+  ```bash
+  source ~/comfy/env.sh
+  pip install ltx-core ltx-pipelines
+  pip install -e ~/ID-LoRA/ID-LoRA-2.3/packages/ltx-trainer
+  pip uninstall bitsandbytes -y
+  ```
+
+- **LTX-2.3 ID-LoRA weights.** ~1.1 GB from `Lightricks/LTX-Video-2.3`. Download when
+  ID-LoRA work begins.
+
+### Longer-term options
+
+- **Q4_K_M Wan transformers.** ~2 GB VRAM savings per expert vs Q5_K_M. Enables 720p
+  resolution headroom with minimal quality cost at 14B scale.
+- **Wan 2.1 VACE 1.3B fast iteration.** The existing `~/videoforge/` files are intact and
+  the `.pth` format is compatible with WanVideoWrapper. Could be wired up as a cheap
+  60-frame draft mode.
 
 ---
 
 ## Quick Start
 
-Models are already downloaded. For a fresh session:
+### Wan 2.2 I2V (current priority)
 
 ```bash
 # 1. Source environment and launch
-source ~/comfy/env.sh
 ~/comfy/launch.sh
 
-# 2. Open UI at http://localhost:8188
+# 2. Open UI
+#    http://localhost:8188
 
-# 3. Build workflow using these nodes (in order):
-#    UnetLoaderGGUF -> DualCLIPLoaderGGUF -> LTXVConditioning
-#    -> LTXVScheduler -> SamplerCustomAdvanced -> VAEDecodeTiled
+# 3. Drag wan22_i2v_portrait_animation.json onto the canvas
+# 4. Upload portrait photo to Load Image node
+# 5. Queue — Lightning OFF for baseline (~3-5 min)
+# 6. Toggle Lightning ON for fast iteration (~30-60 sec)
+```
 
+### LTX-2.3 Text-to-Video (Phase 1 pipeline, awaiting CUDA re-validation)
+
+```bash
+# 1. Source environment and launch
+~/comfy/launch.sh
+
+# 2. Build workflow using these nodes (in order):
+#    UnetLoaderGGUF → DualCLIPLoaderGGUF → LTXVConditioning
+#    → LTXVScheduler → SamplerCustomAdvanced → VAEDecodeTiled
+#    (see comfyui_rdna2.yaml for exact settings)
+
+# 3. Baseline: 512×512, 17 frames, 20 steps, CFG 3.5
 # 4. Run diagnostics anytime
 python ~/comfy/diagnostics.py
 ```
 
 ---
 
-## Known Caveats
+## Useful Commands
 
-1. **`expandable_segments` not yet active on RDNA2/HIP.** The env var is set for forward compatibility. PyTorch 2.9.1+rocm6.3 prints a harmless warning at startup. This will auto-resolve when ROCm HIP adds support.
+```bash
+# Source environment (always do this first)
+source ~/comfy/env.sh
 
-2. **`bitsandbytes` is a transitive dependency of `ltx-trainer`.** It was uninstalled after `pip install -e ltx-trainer` pulled it in. If you ever re-install ltx-trainer or run `pip install` on packages that depend on it, remove it again: `pip uninstall bitsandbytes -y`.
+# Launch ComfyUI
+~/comfy/launch.sh
 
-3. **`transformers` version.** Currently at 5.4.0. The ID-LoRA README flags potential incompatibility with 5.x. No issues observed during text-to-video inference. Monitor during LoRA loading. If failures occur: `pip install 'transformers>=4.52,<5'`.
+# Check GPU
+nvidia-smi
+watch -n 1 nvidia-smi    # live during generation
 
-4. **Standard ComfyUI KSampler pipeline does not work with LTX-2.3.** LTX-2.3 is an audio-video model. `CLIPLoaderGGUF` (single) + `KSampler` produces a tensor dimension mismatch. Always use `DualCLIPLoaderGGUF` (with both Gemma GGUF and text projection file) + `LTXVConditioning` + `LTXVScheduler` + `SamplerCustomAdvanced`.
+# Confirm PyTorch sees the 3090
+source ~/comfy/env.sh && python -c \
+  "import torch; print(torch.__version__); print(torch.cuda.get_device_name(0))"
 
-5. **Text projection file is required.** `ltx-2.3_text_projection_bf16.safetensors` (2.2 GB) must be present in `models/text_encoders/ltx-2.3/` alongside the Gemma GGUF. Without it the embedding shape is wrong and inference will fail.
+# Check Wan 2.2 models are present
+ls -lah ~/comfy/ComfyUI/models/diffusion_models/wan2.2* \
+        ~/comfy/ComfyUI/models/text_encoders/umt5* \
+        ~/comfy/ComfyUI/models/vae/wan_2.1* \
+        ~/comfy/ComfyUI/models/loras/Wan2.2* 2>/dev/null
 
-6. **`--lowvram` flag is required in launch.sh.** Without it the transformer stays in VRAM during VAE decode and causes OOM. `tile_size` must also be 256, not 512.
+# Check LTX-2.3 models are present
+find ~/comfy/ComfyUI/models/diffusion_models/ltx-2.3 \
+     ~/comfy/ComfyUI/models/text_encoders/ltx-2.3 \
+     ~/comfy/ComfyUI/models/vae/ltx-2.3 \
+     -type f -ls 2>/dev/null
 
-7. **ID-LoRA pipeline requires full safetensors checkpoint (43 GB).** The `IDLoraModelLoader` node expects a full fp16 checkpoint, not GGUFs. It is not usable on 16 GB VRAM as-is.
+# Check download session
+tmux ls 2>/dev/null | grep wan22-dl
+tmux attach -t wan22-dl    # Ctrl-b d to detach
 
-8. **Video dimensions must be multiples of 32.** Non-aligned dimensions cause HIP memory access faults. Safe presets: 512x512, 768x512, 1024x576.
+# Check what's listening on 8188
+ss -tlnp 2>/dev/null | grep 8188
 
-9. **Frame count formula: 1 + 8N.** Valid counts: 17, 25, 33, 49, 65... Minimum is 17 (N=2).
+# Kill hanging ComfyUI process
+pkill -f "python.*main.py"
 
-10. **First inference run is slow.** MIOpen compiles GPU kernels for gfx1030 on first use. Expect 10-15 minutes on the very first generation. Subsequent runs start within seconds.
+# Confirm --reserve-vram (not --lowvram) in launch.sh
+grep -E "reserve-vram|lowvram" ~/comfy/launch.sh
+
+# Run diagnostics
+python ~/comfy/diagnostics.py
+```
