@@ -1,26 +1,19 @@
 #!/usr/bin/env bash
-# ─────────────────────────────────────────────────────────────────────────────
-# Launch ComfyUI — LTX-2.3 on RDNA2 (RX 6800 XT, 16GB)
-# ─────────────────────────────────────────────────────────────────────────────
-set -euo pipefail
+# Launch ComfyUI on RTX 3090
+set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source ~/comfy/env.sh
 
-# Load RDNA2 environment variables.
-source "$SCRIPT_DIR/env.sh"
+cd ~/comfy/ComfyUI
 
-# ── Pre-flight checks ───────────────────────────────────────────────────────
-python "$SCRIPT_DIR/diagnostics.py" --quick || {
-    echo "ERROR: Diagnostics failed. Fix the issues above before launching."
-    exit 1
-}
-
-# ── Launch ───────────────────────────────────────────────────────────────────
-cd "$SCRIPT_DIR/ComfyUI"
-
-exec python main.py \
+# Flag rationale:
+#   --listen                     bind to 0.0.0.0 for LAN access
+#   --use-pytorch-cross-attention safe default; switch to
+#                                 --use-sage-attention later if installed
+#   (no --lowvram)               24 GB is plenty; lowvram hurts perf
+#   --reserve-vram 1.0           leave 1 GB for system/display
+python main.py \
     --listen \
     --use-pytorch-cross-attention \
-    --reserve-vram 2.5 \
-    --lowvram \
+    --reserve-vram 1.0 \
     "$@"
