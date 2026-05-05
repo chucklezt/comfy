@@ -42,7 +42,7 @@ phases and now supports two active pipelines.
 |---|---|---|---|---|
 | 1 | AMD RX 6800 XT (16 GB) | ROCm 6.3 / `torch 2.9.1+rocm6.3` | LTX-2.3 22B text-to-video | ✅ Validated end-to-end |
 | 2 | NVIDIA RTX 3090 (24 GB) | CUDA 12.4 / `torch 2.6.0+cu124` | LTX-2.3 (carried over) | ✅ Stack rebuilt and verified |
-| 3 | NVIDIA RTX 3090 (24 GB) | CUDA 12.4 / `torch 2.6.0+cu124` | Wan 2.2 I2V 14B portrait animation | 🔄 Models downloading — first inference pending |
+| 3 | NVIDIA RTX 3090 (24 GB) | CUDA 12.4 / `torch 2.6.0+cu124` | Wan 2.2 I2V 14B portrait animation | ✅ Validated end-to-end (2026-05-05) |
 
 The RX 6800 XT was physically present in chuckai alongside the RTX 3090. The ROCm venv
 was the default until a full investigation in May 2026 revealed that `torch.cuda.is_available()`
@@ -655,28 +655,17 @@ cleanly separated.** No symlinks, no `extra_model_paths.yaml`.
 
 ### Model Inventory — Wan 2.2
 
-Downloads were in progress at session end. Verify completion:
+All files present and confirmed (2026-05-05). The downloader used underscore-style names;
+symlinks with the workflow's expected hyphen-style names were created in-place.
 
-```bash
-ls -lah ~/comfy/ComfyUI/models/diffusion_models/wan2.2-i2v-A14B-*Noise-Q5_K_M.gguf
-ls -lah ~/comfy/ComfyUI/models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors
-ls -lah ~/comfy/ComfyUI/models/vae/wan_2.1_vae.safetensors
-ls -lah ~/comfy/ComfyUI/models/loras/Wan2.2-Lightning_I2V-A14B-4steps_*.safetensors
-```
-
-| File | Size | Source | Directory |
-|---|---|---|---|
-| `wan2.2-i2v-A14B-HighNoise-Q5_K_M.gguf` | ~10 GB | `bullerwins/Wan2.2-I2V-A14B-GGUF` | `diffusion_models/` |
-| `wan2.2-i2v-A14B-LowNoise-Q5_K_M.gguf` | ~10 GB | same | `diffusion_models/` |
-| `umt5_xxl_fp8_e4m3fn_scaled.safetensors` | ~6.7 GB | `Comfy-Org/Wan_2.1_ComfyUI_repackaged` | `text_encoders/` |
-| `wan_2.1_vae.safetensors` | ~250 MB | `Comfy-Org/Wan_2.2_ComfyUI_Repackaged` | `vae/` |
-| `Wan2.2-Lightning_I2V-A14B-4steps_HIGH.safetensors` | ~600 MB | `lightx2v/Wan2.2-Lightning` | `loras/` |
-| `Wan2.2-Lightning_I2V-A14B-4steps_LOW.safetensors` | ~600 MB | same | `loras/` |
-
-Total: ~28 GB. If download session `wan22-dl` is still running:
-```bash
-tmux attach -t wan22-dl    # Ctrl-b d to detach
-```
+| Actual file on disk | Size | Symlink (used by workflow) |
+|---|---|---|
+| `wan2.2_i2v_high_noise_14B_Q5_K_M.gguf` | 11 GB | `wan2.2-i2v-A14B-HighNoise-Q5_K_M.gguf` |
+| `wan2.2_i2v_low_noise_14B_Q5_K_M.gguf` | 11 GB | `wan2.2-i2v-A14B-LowNoise-Q5_K_M.gguf` |
+| `umt5_xxl_fp8_e4m3fn_scaled.safetensors` | 6.3 GB | (no rename needed) |
+| `wan_2.1_vae.safetensors` | 243 MB | (no rename needed) |
+| `wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors` | 1.2 GB | `Wan2.2-Lightning_I2V-A14B-4steps_HIGH.safetensors` |
+| `wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors` | 1.2 GB | `Wan2.2-Lightning_I2V-A14B-4steps_LOW.safetensors` |
 
 ### Workflow JSON
 
@@ -711,12 +700,12 @@ Wan 2.2 14B uses a **Mixture-of-Experts (MoE) architecture** with separate high-
 low-noise expert transformers. They load and sample sequentially — ComfyUI offloads the
 inactive expert during the switch. Both files are required; neither alone is sufficient.
 
-**Sampler configuration:**
+**Sampler configuration (measured on RTX 3090, 832×480, 81 frames):**
 
 | Mode | Steps | CFG | Split at | Time (3090) |
 |---|---|---|---|---|
-| Original (Lightning OFF) | 20 | 3.5 | step 10 | ~3-5 min |
-| Turbo (Lightning ON) | 4 | 1.0 | step 2 | ~30-60 sec |
+| Baseline (Lightning OFF) | 20 | 3.5 | step 10 | **17 min 11 sec** (~50 s/step) |
+| Turbo (Lightning ON) | 4 | 1.0 | step 2 | ~2-4 min (untested) |
 
 Use Original for finals. Use Lightning to scout whether a prompt direction or input photo
 will work before committing to a full render.
@@ -732,41 +721,43 @@ will work before committing to a full render.
 | Pure noise output | ModelSamplingSD3 shift wrong | Both `ModelSamplingSD3` nodes should be 5.0 |
 | Identity drifts at ~frame 40 | Temporal coherence limit of 14B model | Drop to 49 frames; or lower CFG to 3.0 |
 
-### VRAM Budget — Wan 2.2
+### VRAM Budget — Wan 2.2 (measured 2026-05-05)
 
 | Component | GPU Memory |
 |---|---|
-| Wan 2.2 14B transformer (GGUF Q5_K_M, one expert at a time) | ~10-12 GB |
-| UMT5-XXL text encoder (fp8 scaled, CPU offloadable after encode) | ~6 GB |
-| Wan VAE decode | ~2-3 GB |
-| Latents + KV cache (81 frames @ 832×480) | ~2-3 GB |
-| **Expected peak** | **~16-20 GB — fits on 24 GB with `--reserve-vram 1.0`** |
+| Wan 2.2 14B transformer (GGUF Q5_K_M, one expert at a time) | 10.4 GB |
+| UMT5-XXL text encoder (fp8 scaled) | 6.4 GB, CPU-offloaded after encoding |
+| VAE + latents + KV cache (81 frames @ 832×480) | ~4.7 GB |
+| **Actual peak during sampling** | **15.1 GB (61% of 24 GB)** |
 
-No `--lowvram` needed.
+No `--lowvram` needed. 9 GB headroom at peak.
 
 ---
 
 ## Next Steps
 
-### Immediate — Wan 2.2 first inference
+### ✅ Done — Wan 2.2 I2V first inference (2026-05-05)
 
-1. Verify all six model files are present (commands in [Model Inventory](#model-inventory--wan-22) above)
-2. Launch ComfyUI: `~/comfy/launch.sh`
-3. Drag `wan22_i2v_portrait_animation.json` onto the canvas
-4. Verify each loader node's dropdown matches the filename table above
-5. Upload a portrait photo → queue the run (Lightning OFF for baseline)
-6. Evaluate: identity preservation, subtle motion, no talking artifacts
-7. If baseline is good, toggle Lightning ON and compare quality vs speed
+20-step baseline completed end-to-end on the RTX 3090:
+- 832×480, 81 frames, CFG 3.5, euler/simple
+- Wall time: **17 min 11 sec** — MoE switch confirmed (high-noise 0→10, low-noise 10→20)
+- Peak VRAM: 15.1 GB / 24 GB — no OOM
+- Output: `ComfyUI/output/video/Wan2.2_i2v_00001_.mp4`
+
+### Immediate
+
+- **Test Wan 2.2 Lightning mode.** Toggle "Enable 4steps LoRA?" in the subgraph. CFG 1.0,
+  same image — expected ~2-4 min. Use for scouting; use 20-step baseline for finals.
+
+- **Install sageattention.** ~25-30% attention speedup on Ampere. Triton 3.2.0 already present:
+  `pip install sageattention`, then swap `--use-pytorch-cross-attention` → `--use-sage-attention`
+  in `launch.sh`. Will bring Wan 2.2 step time from ~50 s → ~35-38 s.
 
 ### Near-term
 
 - **Re-verify LTX-2.3 on the 3090.** The pipeline has never been run on CUDA. Should work
   fine and be faster. Test `--lowvram` OFF first; the 24 GB headroom likely makes it
   unnecessary.
-
-- **sageattention.** ~25-30% attention speedup on Ampere. Triton 3.2.0 is already in the
-  venv. Install, then switch `--use-pytorch-cross-attention` to `--use-sage-attention` in
-  `launch.sh`.
 
 - **Fix `ID-LoRA-LTX2.3-ComfyUI` import.** When LTX identity work resumes:
   ```bash
@@ -791,19 +782,20 @@ No `--lowvram` needed.
 
 ## Quick Start
 
-### Wan 2.2 I2V (current priority)
+### Wan 2.2 I2V (validated ✅)
 
 ```bash
-# 1. Source environment and launch
-~/comfy/launch.sh
+# 1. Launch
+~/comfy/launch.sh          # UI at http://192.168.1.59:8188
 
-# 2. Open UI
-#    http://localhost:8188
+# 2. Load workflow from the workflow menu:
+#    wan22_i2v_portrait_animation.json
 
-# 3. Drag wan22_i2v_portrait_animation.json onto the canvas
-# 4. Upload portrait photo to Load Image node
-# 5. Queue — Lightning OFF for baseline (~3-5 min)
-# 6. Toggle Lightning ON for fast iteration (~30-60 sec)
+# 3. Upload a portrait photo → Queue
+#    Lightning OFF (default): 20 steps, ~17 min, full quality
+#    Lightning ON (subgraph toggle): 4 steps, ~2-4 min, scouting quality
+
+# Output: ~/comfy/ComfyUI/output/video/Wan2.2_i2v_NNNNN_.mp4
 ```
 
 ### LTX-2.3 Text-to-Video (Phase 1 pipeline, awaiting CUDA re-validation)
