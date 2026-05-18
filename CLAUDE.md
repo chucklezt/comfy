@@ -8,17 +8,22 @@ You are working on **chuckai** — a local Ubuntu 22.04 server with an **NVIDIA 
 The GPU was migrated from an AMD RX 6800 XT / ROCm 6.3 setup to a full CUDA rebuild
 (completed 2026-05-04). ROCm is no longer in use for this workspace.
 
-Three production workflows are currently active:
+Four production workflows are currently active:
 
-1. **LTX-2.3 22B GGUF + Character LoRA** (text-to-video with identity) — generates videos
-   from text prompts with identity-consistent character rendering via ID-LoRA nodes.
+1. **LTX-2.3 Distilled fp8 + custom LoRA** (text-to-video, audio-video capable) — uses the
+   full fp8 distilled checkpoint loaded via `CheckpointLoaderSimple` + `LTXAVTextEncoderLoader`.
+   Faster than the GGUF path (9 steps with res_multistep). Has a custom trained LoRA applied.
 
-2. **Photo Restoration** — two-pass pipeline: FLUX.1 Kontext fp8 (structural restore) +
-   CodeFormer (face reconstruction). Operates on still images.
+2. **LTX-2.3 GGUF Q3 + ID-LoRA** (text-to-video with identity) — uses the GGUF-quantized
+   transformer and GGUF text encoder. Requires ID-LoRA custom nodes for identity-consistent
+   character rendering.
 
-3. **Photo Animation — Wan 2.2 I2V 14B GGUF** (image-to-video) — animates still portrait
-   photos with strong face identity preservation using a MoE two-expert architecture.
-   First inference validated end-to-end 2026-05-05. Output: `video/Wan2.2_i2v_00001_.mp4`.
+3. **Photo Restoration** — multi-stage pipeline: FLUX.1 Kontext fp8 (structural restore) +
+   CodeFormer or GFPGAN (face reconstruction). SUPIR is also available for heavy upscaling.
+   Operates on still images. Multiple saved subject-specific workflow variants exist.
+
+4. **Photo Animation — Wan 2.2 I2V 14B GGUF** (image-to-video) — animates still portrait
+   photos using a MoE two-expert architecture. First inference validated 2026-05-05.
 
 **Current focus: Lightning mode test + sageattention install.**
 
@@ -51,14 +56,18 @@ source ~/comfy/env.sh
 
 ## Custom Nodes
 
-| Node | Commit | Status |
+| Node | Commit | Status / Purpose |
 |---|---|---|
-| ComfyUI-GGUF (city96) | `6ea2651` (2026-01-12) | OK — required for LTX-2.3 and Wan 2.2 GGUF loading |
-| ComfyUI-Manager (ltdrdata) | `8d5c1203` (2026-05-01) | OK |
-| ComfyUI-WanVideoWrapper (kijai) | `df8f3e4` (2026-02-22) | OK — required for Wan 2.2 I2V |
+| ComfyUI-GGUF (city96) | `6ea2651` (2026-01-12) | OK — GGUF loading for LTX-2.3 and Wan 2.2 |
+| ComfyUI-Manager (ltdrdata) | `8d5c1203` (2026-05-01) | OK — node management |
+| ComfyUI-WanVideoWrapper (kijai) | `df8f3e4` (2026-02-22) | OK — Wan 2.2 I2V support |
 | ComfyUI-KJNodes (kijai) | `cd5ad80` (2026-05-03) | OK — utility nodes for Wan pipeline |
 | ComfyUI-VideoHelperSuite (Kosinkadink) | `2984ec4` (2026-04-06) | OK — MP4 output |
-| ID-LoRA-LTX2.3-ComfyUI | `9943746` (2026-03-25) | Active — required for LTX-2.3 Character LoRA workflow |
+| ID-LoRA-LTX2.3-ComfyUI | `9943746` (2026-03-25) | Active — identity LoRA for LTX-2.3 GGUF workflow |
+| facerestore_cf | `ff4d7a5` | OK — CodeFormer face restoration nodes |
+| comfyui_gfpgan | `77577e4` | OK — GFPGAN face restoration nodes |
+| ComfyUI-SUPIR | `99d49e9` | OK — SUPIR heavy upscaling/restoration |
+| ComfyUI_UltimateSDUpscale | `bebd569` | OK — Ultimate SD Upscale tiled upscaling |
 
 **Known cosmetic notice at startup:**
 `ComfyUI-GGUF: Partial torch compile only, consider updating pytorch` — informational only.
@@ -77,60 +86,155 @@ pip uninstall bitsandbytes -y   # ltx-trainer drags this in — remove immediate
 
 ## Model Inventory
 
-### Wan 2.2 I2V 14B GGUF (photo animation — validated 2026-05-05)
+### Checkpoints (`models/checkpoints/`)
 
-The downloader used underscore-style filenames. Symlinks with the hyphen-style names
-expected by the workflow JSON were created in-place:
-
-```
-~/comfy/ComfyUI/models/
-├── diffusion_models/
-│   ├── wan2.2_i2v_high_noise_14B_Q5_K_M.gguf          (11 GB — actual file)
-│   ├── wan2.2_i2v_low_noise_14B_Q5_K_M.gguf           (11 GB — actual file)
-│   ├── wan2.2-i2v-A14B-HighNoise-Q5_K_M.gguf          → symlink
-│   └── wan2.2-i2v-A14B-LowNoise-Q5_K_M.gguf           → symlink
-├── text_encoders/
-│   └── umt5_xxl_fp8_e4m3fn_scaled.safetensors         (6.3 GB)
-├── vae/
-│   └── wan_2.1_vae.safetensors                        (243 MB)
-└── loras/
-    ├── wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors  (1.2 GB — actual file)
-    ├── wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors   (1.2 GB — actual file)
-    ├── Wan2.2-Lightning_I2V-A14B-4steps_HIGH.safetensors          → symlink
-    └── Wan2.2-Lightning_I2V-A14B-4steps_LOW.safetensors           → symlink
-```
-
-### LTX-2.3 22B GGUF (text-to-video + Character LoRA)
-
-All files present and intact. Do not move, rename, or re-download.
-
-| Model | File | Size | Path |
-|---|---|---|---|
-| Transformer | `ltx-2.3-22b-dev-Q3_K_M.gguf` | 11 GB | `models/diffusion_models/ltx-2.3/` |
-| Text Encoder | `google_gemma-3-12b-it-Q4_K_M.gguf` | 6.8 GB | `models/text_encoders/ltx-2.3/` |
-| Embeddings Connector | `ltx-2.3_text_projection_bf16.safetensors` | 2.2 GB | `models/text_encoders/ltx-2.3/` |
-| VAE | `LTX23_video_vae_bf16.safetensors` | 1.4 GB | `models/vae/ltx-2.3/` |
-| ID-LoRA weights | *(see `models/loras/ltx-2.3/`)* | ~1.1 GB | `models/loras/ltx-2.3/` |
-
-Sources (for re-download if needed):
-- Transformer: `unsloth/LTX-2.3-GGUF` (NOT `Lightricks/LTX-Video-2.3-22B-GGUF` — that repo does not exist)
-- Text encoder, embeddings connector, VAE: `Kijai/LTX2.3_comfy`
-- ID-LoRA weights: `Lightricks/LTX-Video-2.3`
-- Full fp16 checkpoint (`ltx-2.3-22b-dev.safetensors`) is 43 GB — do not download
-
-### Photo Restoration Models
-
-| File | Purpose | Directory |
+| File | Size | Purpose |
 |---|---|---|
-| `flux1-dev-kontext_fp8_scaled.safetensors` | FLUX.1 Kontext — structural restore (Pass 1) | `models/diffusion_models/` or `models/unet/` |
-| `codeformer.pth` | Face reconstruction (Pass 2) | `models/facerestore_models/` |
+| `ltx-2.3-22b-distilled-fp8.safetensors` | 28 GB | LTX-2.3 Distilled — full fp8, active production model |
+| `ltx-2.3-22b-dev-fp8.safetensors` | 28 GB | LTX-2.3 Dev — full fp8, reference/alternate |
+| `juggernautXL_v9Rdphoto2Lightning.safetensors` | 6.7 GB | JuggernautXL SDXL checkpoint — photo-realism |
+| `SUPIR-v0F.ckpt` | 5.0 GB | SUPIR face-focused restoration model |
+| `SUPIR-v0Q.ckpt` | 5.0 GB | SUPIR quality-focused restoration model |
 
-FLUX.1 Kontext also requires T5-XXL + CLIP-L text encoders and the FLUX VAE — verify
-those are present in `models/clip/` and `models/vae/` respectively.
+### Diffusion Models / Transformers (`models/diffusion_models/`)
+
+| File | Size | Purpose |
+|---|---|---|
+| `ltx-2.3/ltx-2.3-22b-dev-Q3_K_M.gguf` | 11 GB | LTX-2.3 Dev transformer — GGUF Q3_K_M (GGUF workflow) |
+| `diffusion_models/ltx-2.3-22b-distilled-1.1_transformer_only_mxfp8_block32.safetensors` | 23 GB | LTX-2.3 Distilled transformer only — mxfp8 block32 (**note: double-nested path**) |
+| `flux1-dev-kontext_fp8_scaled.safetensors` | 12 GB | FLUX.1 Kontext — photo restoration (Pass 1) |
+| `wan2.2_i2v_high_noise_14B_Q5_K_M.gguf` | 11 GB | Wan 2.2 high-noise expert (actual file) |
+| `wan2.2_i2v_low_noise_14B_Q5_K_M.gguf` | 11 GB | Wan 2.2 low-noise expert (actual file) |
+| `wan2.2-i2v-A14B-HighNoise-Q5_K_M.gguf` | — | → symlink to above |
+| `wan2.2-i2v-A14B-LowNoise-Q5_K_M.gguf` | — | → symlink to above |
+
+**Note on the double-nested path:** The LTX distilled transformer-only file was downloaded into
+`diffusion_models/diffusion_models/ltx-2.3-22b-distilled-1.1_transformer_only_mxfp8_block32.safetensors`
+— an extra `diffusion_models/` subdirectory inside the `diffusion_models/` model directory.
+The active production workflows use `ltx-2.3-22b-distilled-fp8.safetensors` (the full checkpoint
+in `checkpoints/`) which does not have this path issue.
+
+### Text Encoders (`models/text_encoders/`)
+
+| File | Size | Purpose |
+|---|---|---|
+| `gemma_3_12B_it.safetensors` | 8.8 GB | Gemma 3 12B — full precision, used by LTX Distilled fp8 workflow |
+| `ltx-2.3/google_gemma-3-12b-it-Q4_K_M.gguf` | 6.8 GB | Gemma 3 12B — GGUF Q4, used by LTX GGUF workflow |
+| `ltx-2.3/ltx-2.3_text_projection_bf16.safetensors` | 2.2 GB | LTX-2.3 embeddings connector — required for GGUF workflow |
+| `t5xxl_fp16.safetensors` | 9.2 GB | T5-XXL fp16 — FLUX text encoder |
+| `clip_l.safetensors` | 235 MB | CLIP-L — FLUX text encoder (paired with T5-XXL) |
+| `umt5_xxl_fp8_e4m3fn_scaled.safetensors` | 6.3 GB | UMT5-XXL fp8 — Wan 2.2 text encoder |
+
+### VAE (`models/vae/`)
+
+| File | Size | Purpose |
+|---|---|---|
+| `ae.safetensors` | 320 MB | FLUX VAE — required for photo restoration workflow |
+| `ltx-2.3/LTX23_video_vae_bf16.safetensors` | 1.4 GB | LTX-2.3 VAE — used by GGUF workflow |
+| `wan_2.1_vae.safetensors` | 243 MB | Wan 2.2 VAE |
+
+**Note:** The LTX Distilled fp8 workflow uses the VAE embedded in the full checkpoint, not
+`LTX23_video_vae_bf16.safetensors` directly.
+
+### LoRAs (`models/loras/`)
+
+| File | Size | Purpose |
+|---|---|---|
+| `my_first_lora_v1_copy.safetensors` | 644 MB | Custom trained LoRA — applied in LTX Distilled workflow |
+| `ltx-2.3-22b-distilled-lora-384-1.1.safetensors` | 7.1 GB | LTX-2.3 Distilled official LoRA v1.1 |
+| `wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors` | 1.2 GB | Wan 2.2 Lightning high-noise LoRA (actual file) |
+| `wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors` | 1.2 GB | Wan 2.2 Lightning low-noise LoRA (actual file) |
+| `Wan2.2-Lightning_I2V-A14B-4steps_HIGH.safetensors` | — | → symlink to above |
+| `Wan2.2-Lightning_I2V-A14B-4steps_LOW.safetensors` | — | → symlink to above |
+
+### Latent Upscale Models (`models/latent_upscale_models/`)
+
+| File | Size | Purpose |
+|---|---|---|
+| `ltx-2.3-spatial-upscaler-x2-1.1.safetensors` | 950 MB | LTX-2.3 spatial 2× latent upscaler |
+
+### Upscale Models (`models/upscale_models/`)
+
+| File | Size | Purpose |
+|---|---|---|
+| `4x-foolhardy-Remacri.pth` | 64 MB | ESRGAN 4× — optimized for photorealism |
+| `RealESRGAN_x4plus.pth` | 64 MB | RealESRGAN 4× — general purpose |
+
+### Face Restoration / Detection (`models/facerestore_models/`, `models/facedetection/`)
+
+| File | Size | Purpose |
+|---|---|---|
+| `facerestore_models/codeformer.pth` | 360 MB | CodeFormer — face restoration |
+| `facerestore_models/GFPGANv1.4.pth` | 333 MB | GFPGAN v1.4 — face restoration |
+| `facedetection/detection_Resnet50_Final.pth` | 105 MB | Face detection (required by restoration nodes) |
+| `facedetection/parsing_parsenet.pth` | 82 MB | Face parsing (required by restoration nodes) |
 
 ---
 
-## Workflow 1 — LTX-2.3 22B + Character LoRA (Text-to-Video)
+## Saved Workflows
+
+Located in `~/comfy/ComfyUI/user/default/workflows/`:
+
+| File | Pipeline | Notes |
+|---|---|---|
+| `ltx2.3_video-test.json` | LTX-2.3 Distilled fp8 | `ltx-2.3-22b-distilled-fp8.safetensors` + `gemma_3_12B_it.safetensors` + `my_first_lora_v1_copy.safetensors` |
+| `ltx2.3_video-testparamus.json` | LTX-2.3 Distilled fp8 | Same as above, 9 steps res_multistep, 736×480, 97 frames |
+| `video_ltx2_3_t2v-1.json` | LTX-2.3 (subgraph) | Group-node based wrapper workflow |
+| `video_ltx2_3_t2v-2.json` | LTX-2.3 (subgraph) | Group-node based wrapper workflow |
+| `flux-kontext-restoration.json` | Photo Restoration (minimal) | FLUX Kontext only, no CodeFormer/upscale pass |
+| `flux-kontext-restoration-fast.json` | Photo Restoration (full) | FLUX Kontext + CodeFormer + upscale |
+| `flux-kontext-restoration-fast-face.json` | Photo Restoration | Subject-specific variant |
+| `flux-kontext-restoration-fast-facev1.json` | Photo Restoration | Subject-specific variant |
+| `flux-kontext-restoration-fast-grandma.json` | Photo Restoration | Subject-specific variant (no CodeFormer) |
+| `flux-kontext-restoration-fast-nocolor.json` | Photo Restoration | No-color variant (no CodeFormer) |
+| `flux-kontext-restoration-fast-papado.json` | Photo Restoration | Subject-specific variant |
+| `flux-kontext-restoration-fast-papado2.json` | Photo Restoration | Subject-specific variant |
+| `wan22_i2v_portrait_animation.json` | Wan 2.2 I2V | Main portrait animation workflow |
+| `wan22_i2v_portrait_animation-walk towards.json` | Wan 2.2 I2V | Motion variant |
+
+A copy of the main Wan 2.2 workflow also lives at `~/comfy/wan22_i2v_portrait_animation.json`.
+
+---
+
+## Workflow 1 — LTX-2.3 Distilled fp8 (Text-to-Video)
+
+### Overview
+
+Uses the full fp8 distilled checkpoint loaded as a standard ComfyUI checkpoint. Faster than
+the GGUF workflow — 9 steps with the `res_multistep` sampler. Has a custom trained character
+LoRA (`my_first_lora_v1_copy.safetensors`) applied at strength 1.1.
+
+### Pipeline
+
+| Stage | Node | File / Setting |
+|---|---|---|
+| Model load | `CheckpointLoaderSimple` | `ltx-2.3-22b-distilled-fp8.safetensors` |
+| Text encoder | `LTXAVTextEncoderLoader` | `gemma_3_12B_it.safetensors`, ref model: `ltx-2.3-22b-distilled-fp8.safetensors` |
+| LoRA | `LoraLoaderModelOnly` | `my_first_lora_v1_copy.safetensors`, strength 1.1 |
+| Conditioning | `LTXVConditioning` | LTX-specific |
+| Latent | `EmptyLTXVLatentVideo` | |
+| Sampler | `KSampler` | `res_multistep` scheduler, 9 steps |
+| VAE decode | `VAEDecodeTiled` | tile_size=**256**, temporal_size=32 |
+| Output | `SaveVideo` | |
+
+### Baseline Parameters
+
+| Parameter | Value |
+|---|---|
+| Resolution | 736×480 |
+| Frames | 97 |
+| Steps | 9 (res_multistep — distilled model) |
+| Runtime | Faster than 20-step GGUF path |
+
+### Hard Constraints (same as GGUF path)
+
+- **Video dimensions must be multiples of 32.**
+- **VAE decode must use tiled mode.** tile_size=**256**, temporal_size=32.
+- **Do not upgrade PyTorch.** `2.6.0+cu124` works for all workflows.
+
+---
+
+## Workflow 2 — LTX-2.3 GGUF Q3 + ID-LoRA (Text-to-Video with Identity)
 
 ### Pipeline
 
@@ -155,7 +259,7 @@ work — it produces a tensor dimension mismatch. Use only LTX-specific nodes.
 | Frames | 17 (formula: 1 + 8N, minimum N=2; valid: 17, 25, 33, 49, 65…) |
 | Steps | 20 |
 | CFG | 3.5 |
-| Runtime | ~2 min on the 3090 (was ~3:15 on RX 6800 XT) |
+| Runtime | ~2 min on the 3090 |
 
 ### VRAM Budget
 
@@ -184,35 +288,43 @@ work — it produces a tensor dimension mismatch. Use only LTX-specific nodes.
 
 ---
 
-## Workflow 2 — Photo Restoration
+## Workflow 3 — Photo Restoration
 
 ### Overview
 
-Two-pass pipeline for restoring degraded, aged, or low-quality photographs.
+Multi-stage pipeline for restoring degraded, aged, or low-quality photographs. Operates
+entirely on still images — no video generation involved.
+
+Multiple workflow variants exist for different subjects. The "fast" variants include a
+CodeFormer face-reconstruction pass and upscaling. The "minimal" (`flux-kontext-restoration.json`)
+runs only the FLUX Kontext pass.
 
 - **Pass 1 — FLUX.1 Kontext (fp8 scaled):** Structural restoration and overall image
   enhancement using the FLUX.1 Kontext inpainting/editing model.
-- **Pass 2 — CodeFormer:** Face-specific reconstruction to sharpen facial features.
+- **Pass 2 — Face restore (optional):** CodeFormer or GFPGAN for face-specific sharpening.
+- **Pass 3 — Upscale (optional):** ESRGAN / RealESRGAN for final resolution increase.
+- **Alternative: SUPIR** — heavy restoration and upscaling via SUPIR-v0F / SUPIR-v0Q.
 
-Operates entirely on still images — no video generation involved.
-
-### Pipeline
+### Pipeline (full variant)
 
 | Stage | Node | Model |
 |---|---|---|
 | Load image | `LoadImage` | Input photo |
-| Pass 1 — FLUX Kontext | FLUX UNet loader + sampler | `flux1-dev-kontext_fp8_scaled.safetensors` |
-| Pass 2 — Face restore | CodeFormer node | `codeformer.pth` |
+| Pass 1 — FLUX Kontext | `UNETLoader` + sampler | `flux1-dev-kontext_fp8_scaled.safetensors` |
+| Text encoders | `DualCLIPLoader` | `t5xxl_fp16.safetensors` + `clip_l.safetensors` |
+| FLUX VAE | `VAELoader` | `ae.safetensors` |
+| Pass 2 — Face restore | `FaceRestoreCFWithModel` | `codeformer.pth` (or `GFPGANv1.4.pth`) |
+| Pass 3 — Upscale | `ImageUpscaleWithModel` | `4x-foolhardy-Remacri.pth` or `RealESRGAN_x4plus.pth` |
 | Save | `SaveImage` | Output |
 
 ### VRAM Budget
 
-FLUX.1 Kontext fp8 peaks at ~10–16 GB depending on resolution. CodeFormer adds ~340 MB.
+FLUX.1 Kontext fp8 peaks at ~10–16 GB depending on resolution. CodeFormer adds ~360 MB.
 Well within the 24 GB envelope.
 
 ---
 
-## Workflow 3 — Photo Animation (Wan 2.2 I2V)
+## Workflow 4 — Photo Animation (Wan 2.2 I2V)
 
 ### Validated Result — 2026-05-05
 
@@ -228,20 +340,6 @@ Wan 2.2 14B uses a **Mixture-of-Experts (MoE) architecture** with separate high-
 low-noise expert transformers. They run sequentially — ComfyUI offloads the inactive expert
 during the switch. Both transformer files are required; neither alone is sufficient.
 
-### Loader Node → Filename Mapping
-
-Workflow JSON expects the hyphen-style names. Symlinks on disk point to the actual
-underscore-style files downloaded by the downloader.
-
-| Node | Filename (symlink) | Actual file on disk |
-|---|---|---|
-| Load High-Noise Transformer | `wan2.2-i2v-A14B-HighNoise-Q5_K_M.gguf` | `wan2.2_i2v_high_noise_14B_Q5_K_M.gguf` |
-| Load Low-Noise Transformer | `wan2.2-i2v-A14B-LowNoise-Q5_K_M.gguf` | `wan2.2_i2v_low_noise_14B_Q5_K_M.gguf` |
-| CLIPLoader | `umt5_xxl_fp8_e4m3fn_scaled.safetensors` | (same) |
-| VAELoader | `wan_2.1_vae.safetensors` | (same) |
-| High-Noise Lightning LoRA | `Wan2.2-Lightning_I2V-A14B-4steps_HIGH.safetensors` | `wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors` |
-| Low-Noise Lightning LoRA | `Wan2.2-Lightning_I2V-A14B-4steps_LOW.safetensors` | `wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors` |
-
 ### Loader Ecosystem Note
 
 ComfyUI has two parallel loader paths for Wan — do not mix them:
@@ -255,7 +353,7 @@ ComfyUI has two parallel loader paths for Wan — do not mix them:
 | Mode | Steps | CFG | Split at | Time (3090, measured) | Use for |
 |---|---|---|---|---|---|
 | Original (Lightning OFF) | 20 | 3.5 | step 10 | **17 min 11 sec** | Finals |
-| Turbo (Lightning ON) | 4 | 1.0 | step 2 | ~2-4 min (estimated) | Scouting |
+| Turbo (Lightning ON) | 4 | 1.0 | step 2 | ~2–4 min (estimated) | Scouting |
 
 Baseline: 832×480, 81 frames (5 sec @ 16 fps), euler/simple sampler.
 
@@ -287,9 +385,9 @@ No `--lowvram` needed. `--reserve-vram 1.0` is set in `launch.sh`.
 
 ### 1. Test Lightning mode (4-step turbo)
 
-Open the subgraph on the canvas, toggle "Enable 4steps LoRA?" to `true`. Queue with same
-portrait image. Expected: ~2–4 minutes. Compare identity preservation vs baseline.
-Use Lightning for scouting, 20-step for finals.
+Open the Wan 2.2 subgraph on the canvas, toggle "Enable 4steps LoRA?" to `true`. Queue
+with same portrait image. Expected: ~2–4 minutes. Use Lightning for scouting, 20-step
+for finals.
 
 ### 2. Install sageattention (~25-30% speedup)
 
@@ -299,14 +397,12 @@ pip install sageattention
 ```
 
 Then edit `~/comfy/launch.sh`: replace `--use-pytorch-cross-attention` with
-`--use-sage-attention`. Triton 3.2.0 is already in the venv. Highest-leverage
-optimization available — brings 17 min down toward ~12 min on the 3090.
+`--use-sage-attention`. Triton 3.2.0 is already in the venv. Brings 17 min toward ~12 min.
 
-### 3. Re-verify LTX-2.3 on RTX 3090
+### 3. Re-verify LTX-2.3 GGUF workflow on RTX 3090
 
-LTX-2.3 text-to-video was validated on the RX 6800 XT but has not been run on CUDA.
-Should work fine and be faster. Test `--lowvram` OFF first (24 GB headroom makes it
-unnecessary).
+LTX-2.3 GGUF + ID-LoRA text-to-video was validated on the RX 6800 XT but has not been run
+on CUDA. The Distilled fp8 workflow (`ltx2.3_video-test.json`) is the active path.
 
 ---
 
@@ -348,23 +444,38 @@ watch -n 1 nvidia-smi
 # Confirm GPU is visible to PyTorch
 source ~/comfy/env.sh && python -c "import torch; print(torch.cuda.get_device_name(0)); print(torch.version.cuda)"
 
-# Check Wan 2.2 symlinks and models
-ls -lah ~/comfy/ComfyUI/models/diffusion_models/wan2.2* \
-        ~/comfy/ComfyUI/models/text_encoders/umt5* \
-        ~/comfy/ComfyUI/models/vae/wan_2.1* \
-        ~/comfy/ComfyUI/models/loras/Wan2.2* \
-        ~/comfy/ComfyUI/models/loras/wan2.2* 2>/dev/null
+# --- Model checks ---
 
-# Check LTX-2.3 models
+# LTX-2.3 Distilled fp8 workflow models
+ls -lah ~/comfy/ComfyUI/models/checkpoints/ltx-2.3-22b-distilled-fp8.safetensors
+ls -lah ~/comfy/ComfyUI/models/text_encoders/gemma_3_12B_it.safetensors
+ls -lah ~/comfy/ComfyUI/models/loras/my_first_lora_v1_copy.safetensors
+
+# LTX-2.3 GGUF workflow models
 find ~/comfy/ComfyUI/models/diffusion_models/ltx-2.3 \
      ~/comfy/ComfyUI/models/text_encoders/ltx-2.3 \
      ~/comfy/ComfyUI/models/vae/ltx-2.3 \
      -type f -ls 2>/dev/null
 
-# Check photo restoration models
-ls -lah ~/comfy/ComfyUI/models/diffusion_models/flux1-dev-kontext* 2>/dev/null
-ls -lah ~/comfy/ComfyUI/models/unet/flux1-dev-kontext* 2>/dev/null
-ls -lah ~/comfy/ComfyUI/models/facerestore_models/codeformer.pth 2>/dev/null
+# FLUX / Photo Restoration models
+ls -lah ~/comfy/ComfyUI/models/diffusion_models/flux1-dev-kontext_fp8_scaled.safetensors
+ls -lah ~/comfy/ComfyUI/models/text_encoders/t5xxl_fp16.safetensors
+ls -lah ~/comfy/ComfyUI/models/text_encoders/clip_l.safetensors
+ls -lah ~/comfy/ComfyUI/models/vae/ae.safetensors
+ls -lah ~/comfy/ComfyUI/models/facerestore_models/
+
+# Wan 2.2 models and symlinks
+ls -lah ~/comfy/ComfyUI/models/diffusion_models/wan2.2* \
+        ~/comfy/ComfyUI/models/text_encoders/umt5* \
+        ~/comfy/ComfyUI/models/vae/wan_2.1* \
+        ~/comfy/ComfyUI/models/loras/wan2.2* \
+        ~/comfy/ComfyUI/models/loras/Wan2.2* 2>/dev/null
+
+# All checkpoints
+ls -lah ~/comfy/ComfyUI/models/checkpoints/*.safetensors \
+        ~/comfy/ComfyUI/models/checkpoints/*.ckpt 2>/dev/null
+
+# --- ComfyUI ops ---
 
 # Check what's listening on port 8188
 ss -tlnp 2>/dev/null | grep 8188
@@ -372,10 +483,10 @@ ss -tlnp 2>/dev/null | grep 8188
 # Kill any hanging ComfyUI process
 pkill -f "python.*main.py"
 
-# Check custom node import status
+# Check custom node import status at startup
 grep -E "(ERROR|IMPORT|Traceback)" ~/comfy/comfyui.log 2>/dev/null | tail -20
 
-# Confirm --reserve-vram in launch.sh (not --lowvram)
+# Confirm --reserve-vram is in launch.sh (not --lowvram)
 grep -E "reserve-vram|lowvram" ~/comfy/launch.sh
 ```
 
@@ -385,8 +496,10 @@ grep -E "reserve-vram|lowvram" ~/comfy/launch.sh
 
 | Item | Notes |
 |---|---|
-| sageattention install | ~25-30% attention speedup on Ampere. Triton 3.2.0 already present. Switch `--use-pytorch-cross-attention` → `--use-sage-attention` in `launch.sh`. Do after Lightning test. |
-| Q4_K_M Wan transformers | ~2 GB VRAM savings per expert vs Q5_K_M. Enables 720p resolution headroom. |
-| LTX-2.3 re-validation on CUDA | Pipeline worked on RX 6800 XT; should be faster on 3090. `--lowvram` likely not needed. Do after Lightning test + sageattention. |
-| LTX-2.3 ID-LoRA weights download | ~1.1 GB from `Lightricks/LTX-Video-2.3`. Defer until LTX identity work resumes. |
-| VideoForge Wan 2.1 VACE 1.3B | Existing `~/videoforge/` .pth files are compatible with WanVideoWrapper. Potential fast-draft option; needs a separate workflow. |
+| Wan 2.2 Lightning mode test | 4-step turbo — toggle "Enable 4steps LoRA?" in subgraph. Expected ~2-4 min. **Do next.** |
+| sageattention install | ~25-30% speedup on Ampere. Triton 3.2.0 already present. Switch `--use-pytorch-cross-attention` → `--use-sage-attention` in `launch.sh`. |
+| LTX-2.3 GGUF re-validation on CUDA | Validated on RX 6800 XT; Distilled fp8 path is now primary. GGUF path still works for ID-LoRA workflow. |
+| `ltx-2.3-22b-distilled-1.1_transformer_only_mxfp8_block32.safetensors` path issue | Saved in `diffusion_models/diffusion_models/` (double-nested). May need to move if a workflow references it directly. |
+| SUPIR workflow | SUPIR-v0F, SUPIR-v0Q, and ComfyUI-SUPIR are all present. No saved workflow yet. |
+| `ltx-2.3-22b-distilled-lora-384-1.1.safetensors` | 7.1 GB official distilled LoRA present. Not yet used in saved workflows. |
+| `ltx-2.3-spatial-upscaler-x2-1.1.safetensors` | LTX spatial upscaler present. Not yet wired into a workflow. |
