@@ -1,5 +1,9 @@
 venv/
 ComfyUI/
+!ComfyUI/user/
+!ComfyUI/user/default/
+!ComfyUI/user/default/workflows/
+!ComfyUI/user/default/workflows/*.json
 ID-LoRA/
 __pycache__/
 *.pyc
